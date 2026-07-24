@@ -11,7 +11,6 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
-import org.bukkit.event.entity.VillagerTradeEvent;
 import org.bukkit.event.player.PlayerFishEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerShearEntityEvent;
@@ -48,16 +47,6 @@ public final class VillagerListener implements Listener {
         if (held == Material.BUCKET || (animal instanceof org.bukkit.entity.Sheep && held == Material.SHEARS)) {
             // 牛奶/剪毛保留原版交互，不伪造玩家事件。
         }
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onTrade(VillagerTradeEvent event) {
-        if (BV.socialEngine() == null || BV.villagers() == null || event.getWhoClicked() == null) {
-            return;
-        }
-        Villager villager = event.getVillager();
-        BV.villagers().get(villager.getUniqueId().toString())
-                .ifPresent(bv -> BV.socialEngine().recordTrade(bv, 1));
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

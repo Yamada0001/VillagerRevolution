@@ -12,8 +12,6 @@ messages:
   help-line: "&e{usage} &7- {desc}"
   help-select-hint: "&7使用 &e/bv sel&7 后右键村民选择对象，再次输入可重新选择。"
   selection-start: "&a选择模式已开启，请右键点击一名村民。"
-  villager-selected: "&a已选定村民 &e{name}&a，可对其使用 /bv profession 与 /bv ai。"
-
   # ---------- 传送（修复问题3） ----------
   tp-success: "&a已传送到 &e{loc}"
   tp-failed: "&c传送失败：坐标格式错误。"
@@ -166,7 +164,6 @@ messages:
     building-cache-race: "建筑占位竞争失败，类型 {type} 已被其他任务占用"
     building-quota-full: "村庄 #{village} 已达到当前游戏日建造任务上限"
     building-y-too-low: "村庄 #{village} 建造命令 Y={command-y} 低于表层 Y={surface-y}，已拒绝"
-    ai-provider-init: "AI 供应商已初始化: {provider}"
     recovery-start: "开始补录 {count} 个降级文件..."
     recovery-done: "降级补录完成，成功 {success}/{total}"
     recovery-fail: "补录 {file} 失败: {error}"
@@ -325,8 +322,9 @@ messages:
       - "庄"
 
   # ---------- 系统 ----------
-  startup: "&aBetterVillagers 已启用 (平台: {platform})。"
-  shutdown: "&aBetterVillagers 已禁用，数据已保存。"
+  startup: |-
+    <gradient:#d7ff7b:#d0ff7a:#cafe79:#c3fe77:#bcfd76:#b6fd75:#affc74:#a8fc73:#a2fc71:#9bfb70:#94fb6f:#8efa6e:#87fa6d:#80f96c:#7af96a:#73f969:#6cf868:#66f867:#5ff766:#58f764:#52f663:#4bf662>VillagerRevolution启动成功</gradient>
+  shutdown: "&cBetterVillagers 已禁用，数据已保存。"
 
   # ---------- 职业显示名 ----------
   professions:

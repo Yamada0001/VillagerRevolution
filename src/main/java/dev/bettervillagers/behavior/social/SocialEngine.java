@@ -230,8 +230,8 @@ public final class SocialEngine {
                     for (ItemStack ingredient : ingredients) {
                         traderB.getInventory().addItem(ingredient.clone());
                     }
-                    recipe.increaseUses();
-                    recipe.updateDemand();
+                    recipe.setUses(recipe.getUses() + 1);
+                    recipe.setDemand(recipe.getDemand() + 1);
                     traderB.setRecipes(recipes);
                     traderB.getWorld().spawnParticle(org.bukkit.Particle.HEART, traderB.getLocation().add(0, 2, 0), 2);
                     recordTrade(a, 10);

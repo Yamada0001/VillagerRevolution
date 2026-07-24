@@ -14,7 +14,6 @@ import org.bukkit.block.Block;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.entity.Animals;
 import org.bukkit.entity.Entity;
-import org.bukkit.entity.FishingHook;
 import org.bukkit.entity.IronGolem;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Sheep;
@@ -189,10 +188,25 @@ public final class ProfessionTaskEngine {
     private void gatherFarmGoods(LivingEntity self) {
         for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
             if (nearby instanceof Sheep sheep && !sheep.isDead() && !sheep.isSheared()) {
-                ItemStack shears = new ItemStack(Material.SHEARS);
-                for (ItemStack drop : sheep.getDrops(shears, self)) {
-                    self.getWorld().dropItemNaturally(sheep.getLocation(), drop);
-                }
+                Material wool = switch (sheep.getColor()) {
+                    case BLACK -> Material.BLACK_WOOL;
+                    case BLUE -> Material.BLUE_WOOL;
+                    case BROWN -> Material.BROWN_WOOL;
+                    case CYAN -> Material.CYAN_WOOL;
+                    case GRAY -> Material.GRAY_WOOL;
+                    case GREEN -> Material.GREEN_WOOL;
+                    case LIGHT_BLUE -> Material.LIGHT_BLUE_WOOL;
+                    case LIGHT_GRAY -> Material.LIGHT_GRAY_WOOL;
+                    case LIME -> Material.LIME_WOOL;
+                    case MAGENTA -> Material.MAGENTA_WOOL;
+                    case ORANGE -> Material.ORANGE_WOOL;
+                    case PINK -> Material.PINK_WOOL;
+                    case PURPLE -> Material.PURPLE_WOOL;
+                    case RED -> Material.RED_WOOL;
+                    case YELLOW -> Material.YELLOW_WOOL;
+                    default -> Material.WHITE_WOOL;
+                };
+                self.getWorld().dropItemNaturally(sheep.getLocation(), new ItemStack(wool, 1));
                 sheep.setSheared(true);
                 return;
             }
@@ -267,11 +281,7 @@ public final class ProfessionTaskEngine {
             if (self.getEquipment() != null && self.getEquipment().getItemInMainHand().getType() != Material.FISHING_ROD) {
                 self.getEquipment().setItemInMainHand(new ItemStack(Material.FISHING_ROD));
             }
-            // FishingHook 是玩家钓鱼 API；Villager 无法作为 PlayerFishEvent 操作者。这里仅创建原版钩子，
-            // 不伪造玩家事件；若服务端不接受村民 owner，则不生成兼容性掉落。
-            if (self instanceof Villager) {
-                self.getWorld().spawn(water, FishingHook.class);
-            }
+            // FishingHook 与 PlayerFishEvent 仅支持玩家操作者，Villager 不伪造玩家钓鱼事件。
             self.swingMainHand();
         } else MovementHelper.moveToward(self, water, WORK_SPEED);
     }

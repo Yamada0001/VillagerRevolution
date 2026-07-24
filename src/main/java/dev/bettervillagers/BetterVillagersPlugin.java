@@ -134,10 +134,10 @@ public final class BetterVillagersPlugin extends JavaPlugin {
                 config.autoSaveInterval());
         // 已加载区块中的村民由 ChunkLoadEvent 注册，避免在 Folia 全局线程跨区域遍历世界实体。
 
-        // 12. 启动广播
+        // 12. 启动广播（控制台与玩家各输出一次，避免 Server.sendMessage 重复打控制台）
         String platform = PlatformDetector.isFolia() ? "Folia" : "Paper";
-        getLogger().info(messages.raw("log.startup").replace("{platform}", platform));
-        messages.broadcast("startup", "platform", platform);
+        messages.sendConsoleRaw("startup", "platform", platform);
+        messages.broadcastPlayers("startup", "platform", platform);
     }
 
     @Override

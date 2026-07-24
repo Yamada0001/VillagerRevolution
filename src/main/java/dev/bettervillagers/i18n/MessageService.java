@@ -6,6 +6,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -208,6 +209,38 @@ public final class MessageService {
     /** 广播消息（带前缀）。 */
     public void broadcast(String key, String... pairs) {
         org.bukkit.Bukkit.getServer().sendMessage(get(key, pairs));
+    }
+
+    /** 仅向在线玩家广播，避免与控制台日志重复输出。 */
+    public void broadcastPlayers(String key, String... pairs) {
+        Component full = get(key, pairs);
+        for (org.bukkit.entity.Player player : org.bukkit.Bukkit.getOnlinePlayers()) {
+            player.sendMessage(full);
+        }
+    }
+
+    /**
+     * 获取控制台可显示的消息。控制台不支持 Minecraft 颜色码，因此只输出解析后的纯文本。
+     */
+    public String console(String key, String... pairs) {
+        String text = applyPlaceholders(raw(key), pairs);
+        return PlainTextComponentSerializer.plainText().serialize(deserialize(text));
+    }
+
+    /**
+     * 向控制台发送带颜色的消息（现代 Paper/Folia 控制台支持 ANSI 24-bit 色）。
+     * 直接把 Adventure 组件发给 {@link org.bukkit.command.ConsoleCommandSender}（其实现了 Audience），
+     * 从而保留渐变色 / 十六进制色 / 原版颜色码。用于启动横幅等场景。
+     */
+    public void sendConsoleRaw(String key, String... pairs) {
+        Component full = deserialize(applyPlaceholders(raw(key), pairs));
+        org.bukkit.command.ConsoleCommandSender console = org.bukkit.Bukkit.getConsoleSender();
+        if (console instanceof Audience au) {
+            au.sendMessage(full);
+        } else {
+            // 非 Paper 环境（纯 Spigot）回退纯文本
+            console.sendMessage(PlainTextComponentSerializer.plainText().serialize(full));
+        }
     }
 
     /**
