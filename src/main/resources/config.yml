@@ -1,0 +1,118 @@
+# ============================================================
+# BetterVillagers 主配置
+# 对应开发规范第六章 / 各功能模块配置项
+# ver: 配置版本号（勿手动修改，由 Ver.java 控制）
+# ============================================================
+ver: 3
+plugin:
+  language: "zh_CN"
+  debug-mode: false
+  auto-save-interval: 300   # 秒（规范 4.5：WAL 定时保存）
+
+# ---------- AI 配置（规范 1.x） ----------
+ai:
+  provider: "openai"        # 可选: openai, claude, deepseek, glm, kimi, custom
+  # api-key / api-endpoint / model 已移至下方 providers.<name> 各自配置（不再重复）
+  timeout: 90               # 单次请求超时（秒）
+  max-tokens: 500
+  temperature: 0.7
+  retry-attempts: 3         # 指数退避重试次数（初始 1s，上限 8s）
+  max-concurrent-requests: 8  # 全局并发上限
+  requests-per-second: 5.0    # 令牌桶限流速率（规范 1.3）
+  fallback-providers: []    # 三级降级链备用 provider，如 ["deepseek","glm"]
+  memory:
+    max-history: 50         # AI 对话历史最大条目（规范 4.2）
+    context-keep-recent: 12 # 裁剪后保留最近条数
+  cache:
+    decision-ttl: 300       # 决策缓存 TTL（秒）
+    max-size: 2000
+  # Prompt 模板已迁移到独立文件 prompt.yml（规范 6.2，可直接编辑）
+
+  # 各 provider 独立凭证（规范 1.1 / 4.5：跨厂商降级须各自鉴权）
+  providers:
+    openai:
+      api-key: ""
+      api-endpoint: "https://api.openai.com/v1"
+      model: "gpt-3.5-turbo"
+    claude:
+      api-key: ""
+      api-endpoint: "https://api.anthropic.com"
+      model: "claude-3-5-sonnet-20241022"
+    deepseek:
+      api-key: ""
+      api-endpoint: "https://api.deepseek.com/v1"
+      model: "deepseek-chat"
+    glm:
+      api-key: ""
+      api-endpoint: "https://open.bigmodel.cn/api/paas/v4"
+      model: "glm-4-flash"
+    kimi:
+      api-key: ""
+      api-endpoint: "https://api.moonshot.cn/v1"
+      model: "moonshot-v1-8k"
+    custom:
+      api-key: ""
+      api-endpoint: ""
+      model: ""
+
+# ---------- 熔断器（规范 4.5） ----------
+circuit-breaker:
+  enabled: true
+  failure-threshold-percent: 50  # 统计窗口内失败率阈值
+  min-requests: 10               # 触发统计的最小请求数
+  open-duration: 60              # 熔断持续时间（秒）
+  window-seconds: 60             # 滚动统计窗口（秒）
+
+# ---------- 性能配置（规范 4.4） ----------
+performance:
+  async-threads: 4
+  max-active-ai-villagers: 50   # 同时激活 AI 的村民数量
+  ai-update-interval: 5         # 战术层 AI 思考间隔（秒）
+  strategic-interval: 60        # 战略层 AI 间隔（秒）
+  pathfinding-range: 32         # 寻路最大范围（方块）
+  block-operation-cooldown: 10  # 方块操作冷却（秒）
+  trade-calculation-cache: 300  # 交易价格缓存（秒）
+  trade-cache-max-size: 2000    # 交易价格缓存最大条目
+  trade-quantize-step: 8        # 供需量化步长
+
+# ---------- 功能开关（规范 6.1） ----------
+features:
+  ai-behavior: true
+  block-interaction: true
+  autonomous-building: true
+  self-defense: true
+  auto-trading: true
+  profession-tasks: true    # 各职业核心职责行为（农民种地/军事巡逻/矿工挖矿等，规范 3.3）
+  social-interaction: true  # 跨职业村民相遇驻足攀谈社交（规范 3.3）
+
+# ---------- 生电模式（规范 5.x） ----------
+redstone-mode:
+  enabled: true
+  default-protected: false
+  protected-regions: []
+#    - world: "world"
+#      x1: 100
+#      y1: 60
+#      z1: 100
+#      x2: 200
+#      y2: 80
+#      z2: 200
+#      name: "示例保护区"
+#      owner: "PlayerName"
+
+# ---------- 数据存储（规范 8.x） ----------
+storage:
+  type: "sqlite"            # sqlite | mysql
+  sqlite-file: "bettervillagers.db"
+  mysql:
+    host: "localhost"
+    port: 3306
+    database: "bettervillagers"
+    username: "root"
+    password: ""
+    params: "useSSL=false&useUnicode=true&characterEncoding=utf8"
+
+# ---------- 村庄生成 ----------
+village:
+  detection-radius: 64      # 村庄半径覆盖判定
+  king-spawn-population: 6  # 触发国王生成的最小人口

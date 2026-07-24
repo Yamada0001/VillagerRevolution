@@ -1,0 +1,343 @@
+# BetterVillagers 语言文件（简体中文）
+# 规范 6.2 / 用户规则：所有用户可见文本必须经由此处，禁止硬编码
+messages:
+  prefix: "&7[&6BetterVillagers&7] "
+
+  # ---------- 通用 ----------
+  no-permission: "&c你没有权限执行此操作。"
+  player-only: "&c该命令只能由玩家执行。"
+  unknown-command: "&c未知子命令，使用 &e/bv help &c查看帮助。"
+  reloaded: "&a配置已重载，共加载 {count} 个数据项。"
+  help-header: "&6===== &eBetterVillagers 帮助 &6====="
+  help-line: "&e{usage} &7- {desc}"
+  help-select-hint: "&7使用 &e/bv sel&7 后右键村民选择对象，再次输入可重新选择。"
+  selection-start: "&a选择模式已开启，请右键点击一名村民。"
+  villager-selected: "&a已选定村民 &e{name}&a，可对其使用 /bv profession 与 /bv ai。"
+
+  # ---------- 传送（修复问题3） ----------
+  tp-success: "&a已传送到 &e{loc}"
+  tp-failed: "&c传送失败：坐标格式错误。"
+  tp-world-not-found: "&c世界 {world} 不存在。"
+
+  # ---------- 外交系统（问题5） ----------
+  diplomacy:
+    ally: "同盟"
+    neutral: "中立"
+    enemy: "敌对"
+  diplomacy-changed: "&6村庄外交关系变更为：&e{rel}"
+
+  # ---------- 命令帮助描述（规范 7 / i18n） ----------
+  help-reload: "重载配置"
+  help-debug: "查看运行状态"
+  help-profession: "指派村民职业"
+  help-region: "生电保护区管理"
+  help-village: "村庄信息"
+  help-ai: "AI 控制"
+
+  # ---------- 村民/职业 ----------
+  villager-attacked: "&c村民 {name} 正在遭受攻击！"
+  villager-not-found: "&c未找到指定的村民。"
+  villager-not-selected: "&c请先 &e右键点击&c 一名村民，再使用 /bv 相关指令。"
+  villager-selected: "&a已选定村民 &e{name}&a，可对其使用 /bv profession 与 /bv ai。"
+  fact-unknown: "未知"
+  villager-default: "村民"
+  village-id-format: "村庄#{id}"
+
+  # ---------- 显示名格式（i18n：避免硬编码颜色码） ----------
+  display:
+    villager-name-format: "&f{name}&r &7{profession}"
+  profession-set: "&a已将村民 {name} 的职业设为 &e{profession}&a。"
+  profession-locked: "&7村民 {name} 的职业已被管理员锁定。"
+  profession-invalid: "&c无效的职业：{profession}"
+  profession-cooldown: "&c村民 {name} 的转职冷却尚未结束。"
+
+  # ---------- 村庄 ----------
+  village-info: "&6村庄 {name} &7| 人口: &e{pop} &7| 中心: &e{loc} &7| 国王: &e{king}"
+  village-none: "&7附近未发现村庄。"
+  king-info: "&6国王 &e{name} &7| HP: &e{hp} &7| 状态: &e{state}"
+  king-absent: "&7该村庄当前没有国王。"
+
+  # ---------- 建造 ----------
+  building-started: "&a村民开始建造 &e{structure}&a。 &7&n[点击传送]"
+  building-completed: "&a建造完成：&e{structure}&a。 &7&n[点击传送]"
+  click-to-teleport: "&e点击传送到此位置"
+
+  # ---------- 建造类型名（规范 3.3 / i18n） ----------
+  structure:
+    wall: "城墙"
+    farm: "农田"
+    house: "房屋"
+    upgrade_house: "房屋升级"
+    road: "道路"
+    streetscape: "街景设施"
+    landscape: "环境景观"
+    trade_fair: "市集"
+    destroy: "拆除"
+    defense_drill: "防御演习"
+    harvest_festival: "收获庆典"
+    building_contest: "建筑竞赛"
+  # ---------- 发展阶段（要想富先修路） ----------
+  dev-phase:
+    roads: "道路网络"
+    streetscape: "街景配套"
+    housing: "房屋优化"
+    defense_landscape: "景观与城墙"
+
+  # ---------- 国王命令 ----------
+  king-command: "&6国王 {name}: {command}"
+  village-entry-title: "{village}"
+  village-entry-subtitle: "国王：{king}  |  人数：{pop}"
+  village-entry-actionbar: "&6当前位于 &e{village} &6村庄范围内"
+  village-entry-command: "&6{king}：&f{command}"
+  village-entry-unknown: "未知"
+  village-verify-start: "&7正在异步校验村庄数据（去重/合并重复实体）..."
+
+  # ---------- 生电模式 ----------
+  region-created: "&a生电保护区 &e{name} &a已创建。"
+  region-deleted: "&a生电保护区 &e{name} &a已删除。"
+  region-exists: "&c名称为 &e{name} &c的保护区已存在。"
+  region-not-found: "&c未找到保护区 &e{name}&c。"
+  region-list-header: "&6===== 生电保护区列表 ====="
+  region-list-line: "&e{name} &7| {world} &7({x1},{y1},{z1}) -> ({x2},{y2},{z2}) &7owner: &e{owner}"
+  region-none: "&7当前没有任何生电保护区。"
+  region-need-selection: "&c请先用 WorldEdit 选区。"
+
+  # ---------- AI ----------
+  ai-toggle-on: "&a已为村民 &e{name} &a启用 AI。"
+  ai-toggle-off: "&7已为村民 &e{name} &7禁用 AI。"
+  ai-reset: "&a已重置村民 &e{name} &a的 AI 记忆。"
+  ai-test-prompt: "&7正在测试村民 &e{name}&7 的 AI..."
+  ai-chat-start: "&7正在与村民 &e{name}&7 对话..."
+  ai-test-response: "&e{name}&7: &f{response}"
+  ai-circuit-open: "&cAI 熔断器已开启，临时降级为规则行为。"
+  ai-unavailable: "&cAI 服务不可用，已降级处理。"
+
+  # ---------- 跨职业社交（规范 3.3：村民攀谈内容，AI 不可用时回退） ----------
+  social:
+    chat-default: "今天天气不错"
+    # 攀谈头顶标签格式（i18n：原硬编码颜色码 &e，已提取为键）
+    chat-label-format: "&e\"{text}\""
+    chat-lines:
+      - "{profession}兄弟，最近生意如何？"
+      - "听说村外又有怪物出没，多加小心。"
+      - "今年的收成看起来不错。"
+      - "集市上的货物越来越丰富了。"
+      - "城墙修缮得如何了？需要搭把手吗？"
+      - "井水还很清澈，不用担心。"
+      - "夜里记得关好门窗。"
+      - "有空一起去市集逛逛吧。"
+      - "你那边的活儿忙完了吗？"
+      - "今天辛苦了，注意休息。"
+
+  # Prompt 模板已迁移到独立文件 prompt.yml（规范 6.2）
+
+  # ---------- 跨职业社交 AI 提示词回退（prompt.yml 缺失时使用） ----------
+  ai-prompt:
+    social-chat-system: "你是 Minecraft 中世纪村庄的村民，正在与另一职业的邻居攀谈。只回复一句简短、自然的日常问候或闲聊（10到20个汉字，不要解释你是 AI，不要输出引号或标点以外的符号）。"
+    social-chat-user: "村民: {name}（职业: {profession}）遇到了 {partner}（职业: {partner-profession}）。请给出一句攀谈内容。"
+
+  # ---------- 调试 ----------
+  debug-header: "&6===== BetterVillagers 运行状态 ====="
+  debug-platform: "&7平台: &e{platform}"
+  debug-online-villagers: "&7在线村民: &e{count}"
+  debug-active-ai: "&7活跃 AI 任务: &e{count}"
+  debug-circuit: "&7熔断状态: &e{state}"
+  debug-provider-latency: "&7provider 延迟/错误率: &e{stats}"
+  debug-region-load: "&7区域线程负载: &e{stats}"
+
+  # ---------- 系统日志（规范 4.5 / i18n） ----------
+  log:
+    startup: "BetterVillagers 已启用 (平台: {platform})"
+    shutdown: "BetterVillagers 已禁用，数据已保存。"
+    scheduler-task-error: "调度任务异常: {error}"
+    tactical-tick-error: "战术 tick 异常 {uuid}: {error}"
+    strategic-tick-error: "战略 tick 异常 {uuid}: {error}"
+    batch-save-fail: "批量保存失败，降级落盘: {error}"
+    lang-dir-fail: "无法创建 lang 目录: {error}"
+    lang-read-fail: "读取语言文件失败: {error}"
+    resource-save-fail: "释放资源 {resource} 失败: {error}"
+    pathfind-fail: "寻路失败: {error}"
+    building-terrain-unsuitable: "建造任务 {type} 因地形不适合（水/熔岩/坡度过大）而取消"
+    building-no-builder: "村庄 #{village} 无建筑师，国王建造命令已取消"
+    building-ai-hold: "建筑师 AI 对任务 {type} 决定暂缓（HOLD）"
+    building-phase-hold: "村庄 #{village} 施工阶段 {phase} AI 建议暂缓"
+    building-cache-full: "村庄 #{village} 建筑缓存已满，类型 {type} 达到上限，拒绝重复建造"
+    building-no-slot: "村庄 #{village} 类型 {type} 无合法空位（间距/网格冲突），禁止回退原点堆叠"
+    building-cache-race: "建筑占位竞争失败，类型 {type} 已被其他任务占用"
+    building-quota-full: "村庄 #{village} 已达到当前游戏日建造任务上限"
+    building-y-too-low: "村庄 #{village} 建造命令 Y={command-y} 低于表层 Y={surface-y}，已拒绝"
+    ai-provider-init: "AI 供应商已初始化: {provider}"
+    recovery-start: "开始补录 {count} 个降级文件..."
+    recovery-done: "降级补录完成，成功 {success}/{total}"
+    recovery-fail: "补录 {file} 失败: {error}"
+    memory-cleanup: "清理 {count} 个不活跃/死亡村民"
+    ai-decide-exception: "AI 决策异常: {error}"
+    provider-failed: "provider {id} 失败: {error}"
+    provider-error: "provider {id} 异常: {error}"
+    trade-error: "交易处理异常 {uuid}: {error}"
+    data-dir-fail: "无法创建数据目录: {error}"
+    prompt-read-fail: "读取 prompt.yml 失败: {error}"
+    attr-set-fail: "设置属性 {key} 失败: {error}"
+    version-missing: "[{file}] 缺少版本号 ({key})，当前插件期望版本 {expected}。建议删除该文件让插件重新生成。"
+    version-mismatch: "[{file}] 版本不匹配：文件版本 {actual}，插件期望版本 {expected}。建议备份后删除该文件重新生成，或手动对照更新。"
+    dir-create-fail: "无法创建目录: {error}"
+    resource-release-fail: "无法释放 {file}: {error}"
+    provider-call-fail: "{provider} 调用失败: {error}"
+    ai-provider-init: "AI Provider: {provider}"
+
+  # ---------- 线程边界守护（规范 4.5） ----------
+  guard:
+    illegal-region: "非法线程：方块操作未在区域线程执行 location={location}"
+    illegal-tick: "非法线程：世界状态操作未在 tick 线程执行"
+    illegal-async: "非法线程：纯计算任务不应在 tick 线程执行"
+
+  # ---------- 存储异常（规范 8.x / i18n） ----------
+  errors:
+    driver-missing: "未找到 MySQL/MariaDB 驱动！请将驱动放入服务端 libs 或切换 storage.type=sqlite。"
+    schema-init: "初始化数据库 schema 失败: {error}"
+    villager-save: "保存村民失败 {uuid}: {error}"
+    villager-batch-save: "批量保存村民失败: {error}"
+    villager-query: "查询村民失败 {uuid}: {error}"
+    villager-query-village: "查询村庄村民失败: {error}"
+    villager-query-all: "查询全部村民失败: {error}"
+    villager-delete: "删除村民失败 {uuid}: {error}"
+    village-insert: "插入村庄失败: {error}"
+    village-king-update: "更新村庄国王失败: {error}"
+    village-name-update: "更新村庄名字失败: {error}"
+    village-merge: "合并村庄失败 #{from}→#{to}: {error}"
+    village-population-update: "更新村庄人口失败: {error}"
+    village-query: "查询村庄失败: {error}"
+    village-delete: "删除村庄失败: {error}"
+    region-insert: "插入保护区失败: {error}"
+    region-update: "更新保护区失败: {error}"
+    region-delete: "删除保护区失败: {error}"
+    region-query: "查询保护区失败: {error}"
+    region-query-name: "查询保护区失败 {name}: {error}"
+    fallback-dump-fail: "降级落盘失败 {name}: {error}"
+    missing-mysql-driver: "缺少 MySQL 驱动"
+    ai-rate-limit: "限流 429"
+    ai-rate-limiter-interrupted: "AI 请求限流等待被中断"
+    ai-http-error: "HTTP {code}: {body}"
+
+  # ---------- 调试补充 ----------
+  debug-circuit-disabled: "已禁用"
+  debug-stats-format: "provider={provider} 命中={hits} 未命中={misses}"
+
+  # ---------- 命令用法占位符（规范 6.2 / i18n） ----------
+  usage-profession: "<职业>"
+  usage-prompt: "<提示词>"
+
+  # ---------- 名字库（规范 6.2 / i18n：中世纪风格名字数据） ----------
+  names:
+    villager-prefix:
+      - "阿尔"
+      - "贝尔"
+      - "塞德"
+      - "达里"
+      - "埃德"
+      - "芬恩"
+      - "加尔"
+      - "亨利"
+      - "伊万"
+      - "杰罗"
+      - "卡尔"
+      - "兰斯"
+      - "马尔"
+      - "诺亚"
+      - "奥兰"
+      - "佩里"
+      - "昆恩"
+      - "罗兰"
+      - "塞巴"
+      - "托马"
+      - "乌尔"
+      - "维克"
+      - "威廉"
+      - "希尔"
+      - "亚尔"
+      - "布莱"
+      - "卡斯"
+      - "丹尼"
+      - "艾莉"
+      - "弗蕾"
+      - "格蕾"
+      - "海伦"
+      - "伊莎"
+      - "珍妮"
+      - "凯特"
+      - "莉莉"
+      - "梅丽"
+      - "妮可"
+      - "奥莉"
+      - "波莉"
+    villager-suffix:
+      - "蒙德"
+      - "斯坦"
+      - "里克"
+      - "里斯"
+      - "温德"
+      - "顿"
+      - "菲尔"
+      - "加尔"
+      - "纳斯"
+      - "里安"
+      - "德"
+      - "尔"
+      - "文"
+      - "斯"
+      - "蒙"
+      - "伍德"
+      - "堡"
+    villager-title:
+      - "勇敢的"
+      - "智慧的"
+      - "铁手"
+      - "光明"
+      - "暗影"
+      - "苍狼"
+      - "银鹰"
+      - "烈焰"
+      - "寒冰"
+      - "橡木"
+      - "迅风"
+      - "磐石"
+      - "星辰"
+      - "暮光"
+      - "晨曦"
+    village-prefix:
+      - "晨曦"
+      - "暮色"
+      - "繁星"
+      - "苍翠"
+      - "静谧"
+      - "银月"
+      - "金穗"
+      - "碧水"
+      - "烈焰"
+      - "寒霜"
+    village-suffix:
+      - "镇"
+      - "村"
+      - "堡"
+      - "谷"
+      - "港"
+      - "营"
+      - "庄"
+
+  # ---------- 系统 ----------
+  startup: "&aBetterVillagers 已启用 (平台: {platform})。"
+  shutdown: "&aBetterVillagers 已禁用，数据已保存。"
+
+  # ---------- 职业显示名 ----------
+  professions:
+    king: "&6国王"
+    knight: "&b骑士"
+    soldier: "&7士兵"
+    archer: "&a弓箭手"
+    butcher: "&c屠夫"
+    chef: "&e厨师"
+    farmer: "&a农民"
+    miner: "&f矿工"
+    builder: "&d建筑师"
+    merchant: "&6商人"
+    civilian: "&7村民"
