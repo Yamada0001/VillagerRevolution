@@ -10,6 +10,9 @@ import net.kyori.adventure.text.Component;
 import org.bukkit.Location;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Villager;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.MerchantRecipe;
 
 import java.util.List;
 import java.util.Set;
@@ -48,6 +51,10 @@ public final class SocialEngine {
 
     /** 正在攀谈中的村民 UUID 集合（原子占位，防止并发重复触发）。 */
     private final Set<String> engaged = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<String, Integer> friendship = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> breedingCooldown = new ConcurrentHashMap<>();
+    private static final int BREEDING_THRESHOLD = 100;
+    private static final long BREEDING_COOLDOWN_MS = 120_000L;
 
     /**
      * 执行一次社交检测（由社交 tick 经实体区域线程调用）。
@@ -103,7 +110,11 @@ public final class SocialEngine {
         if (!tryEngage(bv.uuid(), partner.uuid())) {
             return;
         }
-        startChat(bv, partner, self, partnerEnt, now);
+        if (ThreadLocalRandom.current().nextDouble() < 0.35) {
+            startTrade(bv, partner, self, partnerEnt, now);
+        } else {
+            startChat(bv, partner, self, partnerEnt, now);
+        }
     }
 
     /** 寻找附近可攀谈的不同职业村民。 */
@@ -172,6 +183,111 @@ public final class SocialEngine {
         requestChatContent(a, b);
     }
 
+    private void startTrade(BVillager a, BVillager b, LivingEntity aEnt, LivingEntity bEnt, long now) {
+        a.state(VillagerState.TRADING);
+        a.lastSocialTime(now);
+        if (!(aEnt instanceof Villager traderA) || !(bEnt instanceof Villager traderB)
+                || BV.trade() == null || !traderA.isValid() || !traderB.isValid()) {
+            endTrade(a);
+            return;
+        }
+        BV.scheduler().runForEntity(bEnt, () -> {
+            if (!traderB.isValid()) {
+                endTrade(b);
+                return;
+            }
+            List<MerchantRecipe> recipes = traderB.getRecipes();
+            if (recipes.isEmpty()) {
+                endTrade(b);
+                BV.scheduler().runForEntity(aEnt, () -> endTrade(a), null);
+                return;
+            }
+            MerchantRecipe recipe = recipes.get(ThreadLocalRandom.current().nextInt(recipes.size()));
+            if (recipe.getUses() >= recipe.getMaxUses()) {
+                endTrade(b);
+                BV.scheduler().runForEntity(aEnt, () -> endTrade(a), null);
+                return;
+            }
+            List<ItemStack> ingredients = recipe.getIngredients().stream().map(ItemStack::clone).toList();
+            ItemStack result = recipe.getResult().clone();
+            b.state(VillagerState.TRADING);
+            b.lastSocialTime(now);
+            BV.scheduler().runForEntity(aEnt, () -> {
+                if (!traderA.isValid() || !traderB.isValid() || !canPay(traderA.getInventory(), ingredients)) {
+                    endTrade(a);
+                    BV.scheduler().runForEntity(bEnt, () -> endTrade(b), null);
+                    return;
+                }
+                for (ItemStack ingredient : ingredients) {
+                    remove(traderA.getInventory(), ingredient);
+                }
+                traderA.getInventory().addItem(result);
+                traderA.getWorld().spawnParticle(org.bukkit.Particle.HEART, traderA.getLocation().add(0, 2, 0), 2);
+                BV.scheduler().runForEntity(bEnt, () -> {
+                    if (!traderB.isValid()) {
+                        return;
+                    }
+                    for (ItemStack ingredient : ingredients) {
+                        traderB.getInventory().addItem(ingredient.clone());
+                    }
+                    recipe.increaseUses();
+                    recipe.updateDemand();
+                    traderB.setRecipes(recipes);
+                    traderB.getWorld().spawnParticle(org.bukkit.Particle.HEART, traderB.getLocation().add(0, 2, 0), 2);
+                    recordTrade(a, 10);
+                    recordTrade(b, 10);
+                    endTrade(b);
+                }, null);
+                endTrade(a);
+            }, null);
+        }, null);
+    }
+
+    private boolean canPay(Inventory inventory, List<ItemStack> ingredients) {
+        for (ItemStack ingredient : ingredients) {
+            if (!contains(inventory, ingredient)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean contains(Inventory inventory, ItemStack wanted) {
+        int total = 0;
+        for (ItemStack stack : inventory.getContents()) {
+            if (stack != null && stack.isSimilar(wanted)) total += stack.getAmount();
+        }
+        return total >= wanted.getAmount();
+    }
+
+    private void remove(Inventory inventory, ItemStack wanted) {
+        int remaining = wanted.getAmount();
+        for (ItemStack stack : inventory.getContents()) {
+            if (remaining == 0) return;
+            if (stack != null && stack.isSimilar(wanted)) {
+                int used = Math.min(remaining, stack.getAmount());
+                stack.setAmount(stack.getAmount() - used);
+                remaining -= used;
+            }
+        }
+    }
+
+    public void recordTrade(BVillager villager, int amount) {
+        if (villager == null) return;
+        String key = pairKey(villager.uuid(), villager.uuid());
+        friendship.merge(key, Math.max(0, amount), Integer::sum);
+    }
+
+    private String pairKey(String a, String b) {
+        return a.compareTo(b) < 0 ? a + ":" + b : b + ":" + a;
+    }
+
+    private void endTrade(BVillager bv) {
+        bv.state(VillagerState.IDLE);
+        engaged.remove(bv.uuid());
+        if (BV.villagers() != null) BV.villagers().updateDisplayName(bv);
+    }
+
     /** 结束攀谈：恢复头顶名称显示与状态。 */
     private void endChat(BVillager bv) {
         bv.state(VillagerState.IDLE);
@@ -184,6 +300,8 @@ public final class SocialEngine {
     /** 释放占位（村民卸载时调用）。 */
     public void release(String uuid) {
         engaged.remove(uuid);
+        friendship.keySet().removeIf(key -> key.startsWith(uuid + ":") || key.endsWith(":" + uuid));
+        breedingCooldown.keySet().removeIf(key -> key.startsWith(uuid + ":") || key.endsWith(":" + uuid));
     }
 
     /** 双方面朝对方（贴合原版村民 gossip 面对面）。 */

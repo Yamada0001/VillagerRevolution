@@ -23,7 +23,10 @@ public final class VanillaProfessionMapper {
             case FARMER -> Villager.Profession.FARMER;
             case MINER -> Villager.Profession.MASON;
             case BUILDER -> Villager.Profession.CLERIC;
-            case MERCHANT -> Villager.Profession.CLERIC;
+            case MERCHANT, ENCHANTER -> Villager.Profession.CLERIC;
+            case DOCTOR -> Villager.Profession.CLERIC;
+            case FISHERMAN -> Villager.Profession.FISHERMAN;
+            case BLACKSMITH -> Villager.Profession.TOOLSMITH;
             default -> Villager.Profession.NITWIT;
         };
     }

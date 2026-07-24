@@ -323,6 +323,72 @@ professions:
       - { material: REDSTONE, amount: 16, min-price: 2, max-price: 5 }
       - { material: GOLDEN_APPLE, amount: 2, min-price: 16, max-price: 28 }
 
+  # ============ 医生 ============
+  doctor:
+    enabled: true
+    max-per-village: 2
+    spawn-weight: 3
+    inherit-rate: 0.3
+    stats: { health: 20, attack: 2, defense: LOW }
+    equipment: { main-hand: { material: POTION } }
+    durability-loss-rate: 0.5
+    behavior-weights: { heal: 0.8, trade: 0.2 }
+    personality: { bravery: 0.3, greed: 0.2 }
+    block-whitelist: []
+    trades:
+      - { material: POTION, amount: 2, min-price: 3, max-price: 8 }
+      - { material: GOLDEN_APPLE, amount: 1, min-price: 12, max-price: 24 }
+
+  # ============ 渔夫 ============
+  fisherman:
+    enabled: true
+    max-per-village: 3
+    spawn-weight: 5
+    inherit-rate: 0.3
+    stats: { health: 20, attack: 2, defense: LOW }
+    equipment: { main-hand: { material: FISHING_ROD } }
+    durability-loss-rate: 0.8
+    behavior-weights: { fish: 0.8, trade: 0.2 }
+    personality: { bravery: 0.3, greed: 0.4 }
+    block-whitelist: []
+    trades:
+      - { material: COD, amount: 8, min-price: 2, max-price: 5 }
+      - { material: SALMON, amount: 8, min-price: 3, max-price: 6 }
+      - { material: FISHING_ROD, amount: 1, min-price: 4, max-price: 10 }
+
+  # ============ 附魔师 ============
+  enchanter:
+    enabled: true
+    max-per-village: 2
+    spawn-weight: 3
+    inherit-rate: 0.3
+    stats: { health: 20, attack: 2, defense: LOW }
+    equipment: { main-hand: { material: ENCHANTED_BOOK } }
+    durability-loss-rate: 0.5
+    behavior-weights: { enchant: 0.8, trade: 0.2 }
+    personality: { bravery: 0.2, greed: 0.6 }
+    block-whitelist: []
+    trades:
+      - { material: ENCHANTED_BOOK, amount: 1, min-price: 8, max-price: 24, enchants: [ {name: UNBREAKING, level: 3} ] }
+      - { material: EXPERIENCE_BOTTLE, amount: 8, min-price: 6, max-price: 12 }
+
+  # ============ 铁匠 ============
+  blacksmith:
+    enabled: true
+    max-per-village: 3
+    spawn-weight: 5
+    inherit-rate: 0.3
+    stats: { health: 24, attack: 4, defense: MEDIUM }
+    equipment: { main-hand: { material: IRON_AXE } }
+    durability-loss-rate: 1.0
+    behavior-weights: { repair: 0.8, trade: 0.2 }
+    personality: { bravery: 0.6, greed: 0.5 }
+    block-whitelist: []
+    trades:
+      - { material: IRON_PICKAXE, amount: 1, min-price: 8, max-price: 16, enchants: [ {name: EFFICIENCY, level: 3} ] }
+      - { material: IRON_AXE, amount: 1, min-price: 6, max-price: 14 }
+      - { material: IRON_SHOVEL, amount: 1, min-price: 4, max-price: 10 }
+
   # ============ 普通人 ============
   civilian:
     enabled: true

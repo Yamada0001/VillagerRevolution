@@ -14,6 +14,10 @@ public enum Profession {
     MINER,
     BUILDER,
     MERCHANT,
+    DOCTOR,
+    FISHERMAN,
+    ENCHANTER,
+    BLACKSMITH,
     CIVILIAN;
 
     public String id() {

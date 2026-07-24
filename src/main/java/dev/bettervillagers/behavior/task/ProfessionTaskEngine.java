@@ -12,8 +12,22 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.Ageable;
+import org.bukkit.entity.Animals;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.FishingHook;
+import org.bukkit.entity.IronGolem;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Sheep;
+import org.bukkit.entity.Tameable;
+import org.bukkit.entity.Villager;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.Damageable;
+import org.bukkit.enchantments.Enchantment;
+import org.bukkit.Particle;
 
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -53,6 +67,7 @@ public final class ProfessionTaskEngine {
 
     private final MilitaryTask militaryTask;
     private final BlockInteractionEngine blocks;
+    private final Map<UUID, Long> milkCooldown = new ConcurrentHashMap<>();
 
     public ProfessionTaskEngine(MilitaryTask militaryTask, BlockInteractionEngine blocks) {
         this.militaryTask = militaryTask;
@@ -83,12 +98,19 @@ public final class ProfessionTaskEngine {
         bv.lastWorkTask(now);
 
         Profession prof = bv.profession();
+        if (prof != Profession.DOCTOR && seekDoctor(bv, self)) {
+            return;
+        }
         if (MilitaryTask.isMilitary(prof)) {
             militaryTask.execute(bv);
             return;
         }
         switch (prof) {
             case FARMER -> farmerCycle(bv, self);
+            case DOCTOR -> doctorCycle(bv, self);
+            case FISHERMAN -> fishermanCycle(bv, self);
+            case ENCHANTER -> enchanterCycle(bv, self);
+            case BLACKSMITH -> blacksmithCycle(bv, self);
             case MINER -> minerCycle(bv, self);
             case CHEF -> crafterCycle(bv, self);
             case BUTCHER -> butcherCycle(bv, self);
@@ -147,7 +169,171 @@ public final class ProfessionTaskEngine {
             return;
         }
         // 4. 田间打理：在田间区域巡视，发现并走向已有作物
+        gatherFarmGoods(self);
         wanderInVillage(bv, self, 0.35);
+    }
+
+    private boolean feedNearbyPet(LivingEntity self) {
+        for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
+            if (nearby instanceof Tameable pet && (pet.getType() == org.bukkit.entity.EntityType.CAT
+                    || pet.getType() == org.bukkit.entity.EntityType.WOLF) && !pet.isDead()) {
+                Material food = pet.getType() == org.bukkit.entity.EntityType.CAT ? Material.COD : Material.BEEF;
+                self.getWorld().dropItemNaturally(pet.getLocation(), new ItemStack(food));
+                self.getWorld().spawnParticle(Particle.HEART, pet.getLocation().add(0, 1, 0), 2);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void gatherFarmGoods(LivingEntity self) {
+        for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
+            if (nearby instanceof Sheep sheep && !sheep.isDead() && !sheep.isSheared()) {
+                ItemStack shears = new ItemStack(Material.SHEARS);
+                for (ItemStack drop : sheep.getDrops(shears, self)) {
+                    self.getWorld().dropItemNaturally(sheep.getLocation(), drop);
+                }
+                sheep.setSheared(true);
+                return;
+            }
+            if (nearby instanceof Animals animal && animal.getType().name().equals("COW") && !animal.isDead()
+                    && self instanceof Villager villager) {
+                long now = System.currentTimeMillis();
+                long last = milkCooldown.getOrDefault(animal.getUniqueId(), 0L);
+                if (now - last >= WORK_INTERVAL_MS && removeOne(villager, Material.BUCKET)) {
+                    milkCooldown.put(animal.getUniqueId(), now);
+                    villager.getInventory().addItem(new ItemStack(Material.MILK_BUCKET));
+                    return;
+                }
+            }
+        }
+    }
+
+    private boolean seekDoctor(BVillager bv, LivingEntity self) {
+        org.bukkit.attribute.AttributeInstance maxHealth = self.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
+        if (maxHealth == null || self.getHealth() > maxHealth.getValue() * 0.02) {
+            return false;
+        }
+        for (Entity nearby : self.getNearbyEntities(OP_RADIUS * 2, OP_RADIUS, OP_RADIUS * 2)) {
+            if (!(nearby instanceof Villager doctor) || doctor.isDead()) {
+                continue;
+            }
+            BVillager doctorBv = BV.villagers() == null ? null
+                    : BV.villagers().get(doctor.getUniqueId().toString()).orElse(null);
+            if (doctorBv == null || doctorBv.profession() != Profession.DOCTOR) {
+                continue;
+            }
+            MovementHelper.moveToward(self, doctor.getLocation(), WORK_SPEED);
+            bv.state(VillagerState.FLEEING);
+            return true;
+        }
+        return false;
+    }
+
+    private void doctorCycle(BVillager bv, LivingEntity self) {
+        LivingEntity target = null;
+        double best = Double.MAX_VALUE;
+        for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
+            if (!(nearby instanceof Villager villager) || villager == self || villager.isDead()) {
+                continue;
+            }
+            org.bukkit.attribute.AttributeInstance maxHealth = villager.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
+            if (maxHealth == null || villager.getHealth() > maxHealth.getValue() * 0.02
+                    || villager.getHealth() >= maxHealth.getValue()) {
+                continue;
+            }
+            double d = self.getLocation().distanceSquared(villager.getLocation());
+            if (d < best) { best = d; target = villager; }
+        }
+        if (target == null) return;
+        bv.state(VillagerState.WORKING);
+        if (withinReach(self.getLocation(), target.getLocation())) {
+            LivingEntity healed = target;
+            BV.scheduler().runForEntity(healed, () -> {
+                if (!healed.isDead()) {
+                    double max = healed.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
+                    healed.setHealth(Math.min(max, healed.getHealth() + Math.max(0.5, max * 0.05)));
+                    healed.getWorld().spawnParticle(Particle.HEART, healed.getLocation().add(0, 1.5, 0), 1);
+                }
+            }, null);
+        } else MovementHelper.moveToward(self, target.getLocation(), WORK_SPEED);
+    }
+
+    private void fishermanCycle(BVillager bv, LivingEntity self) {
+        Location water = findWater(self);
+        if (water == null) { wanderInVillage(bv, self, WORK_SPEED); return; }
+        bv.state(VillagerState.WORKING);
+        if (withinReach(self.getLocation(), water)) {
+            if (self.getEquipment() != null && self.getEquipment().getItemInMainHand().getType() != Material.FISHING_ROD) {
+                self.getEquipment().setItemInMainHand(new ItemStack(Material.FISHING_ROD));
+            }
+            // FishingHook 是玩家钓鱼 API；Villager 无法作为 PlayerFishEvent 操作者。这里仅创建原版钩子，
+            // 不伪造玩家事件；若服务端不接受村民 owner，则不生成兼容性掉落。
+            if (self instanceof Villager) {
+                self.getWorld().spawn(water, FishingHook.class);
+            }
+            self.swingMainHand();
+        } else MovementHelper.moveToward(self, water, WORK_SPEED);
+    }
+
+    private boolean removeOne(Villager villager, Material material) {
+        for (ItemStack stack : villager.getInventory().getContents()) {
+            if (stack != null && stack.getType() == material && stack.getAmount() > 0) {
+                stack.setAmount(stack.getAmount() - 1);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Location findWater(LivingEntity self) {
+        Location origin = self.getLocation();
+        World world = origin.getWorld();
+        if (world == null) return null;
+        Block water = scanFor(world, origin, OP_RADIUS, b -> b.getType() == Material.WATER);
+        return water == null ? null : water.getLocation();
+    }
+
+    private void enchanterCycle(BVillager bv, LivingEntity self) {
+        bv.state(VillagerState.WORKING);
+        ItemStack item = self.getEquipment() == null ? null : self.getEquipment().getItemInMainHand();
+        if (item != null && item.getType() != Material.AIR && item.getItemMeta() instanceof Damageable damageable
+                && damageable.hasDamage()) {
+            item.addUnsafeEnchantment(Enchantment.UNBREAKING, 1);
+            Villager villager = self instanceof Villager v ? v : null;
+            if (villager != null && BV.trade() != null) villager.setRecipes(BV.trade().generateOffers(bv));
+            self.getWorld().spawnParticle(Particle.ENCHANT, self.getLocation().add(0, 1, 0), 5);
+        }
+    }
+
+    private boolean consumeIronIngot(LivingEntity self) {
+        if (!(self instanceof Villager villager)) return false;
+        ItemStack[] contents = villager.getInventory().getContents();
+        for (ItemStack stack : contents) {
+            if (stack != null && stack.getType() == Material.IRON_INGOT && stack.getAmount() > 0) {
+                stack.setAmount(stack.getAmount() - 1);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void blacksmithCycle(BVillager bv, LivingEntity self) {
+        bv.state(VillagerState.WORKING);
+        for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
+            if (nearby instanceof IronGolem golem && !golem.isDead()
+                    && golem.getHealth() < golem.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue()) {
+                if (withinReach(self.getLocation(), golem.getLocation()) && consumeIronIngot(self)) {
+                    LivingEntity repaired = golem;
+                    BV.scheduler().runForEntity(repaired, () -> {
+                        double max = repaired.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
+                        repaired.setHealth(Math.min(max, repaired.getHealth() + 2.0));
+                        repaired.getWorld().spawnParticle(Particle.CRIT, repaired.getLocation().add(0, 1, 0), 2);
+                    }, null);
+                } else MovementHelper.moveToward(self, golem.getLocation(), WORK_SPEED);
+                return;
+            }
+        }
     }
 
     /** 判断方块是否为可收获的成熟作物。 */

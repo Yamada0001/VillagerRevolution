@@ -11,7 +11,11 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.VillagerTradeEvent;
+import org.bukkit.event.player.PlayerFishEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerShearEntityEvent;
+import org.bukkit.Material;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
@@ -24,6 +28,37 @@ import org.bukkit.inventory.EquipmentSlot;
  * 右键村民：登记为 /bv 指令作用对象。
  */
 public final class VillagerListener implements Listener {
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onFish(PlayerFishEvent event) {
+        // 原版玩家事件保持不取消；这里只同步注册村民相关的行为状态。
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onShear(PlayerShearEntityEvent event) {
+        // 原版玩家事件保持不取消；羊的 Shearable 状态由 Bukkit/Paper 处理。
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInteractAnimal(PlayerInteractEntityEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND || !(event.getRightClicked() instanceof org.bukkit.entity.Animals animal)) {
+            return;
+        }
+        Material held = event.getPlayer().getInventory().getItemInMainHand().getType();
+        if (held == Material.BUCKET || (animal instanceof org.bukkit.entity.Sheep && held == Material.SHEARS)) {
+            // 牛奶/剪毛保留原版交互，不伪造玩家事件。
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onTrade(VillagerTradeEvent event) {
+        if (BV.socialEngine() == null || BV.villagers() == null || event.getWhoClicked() == null) {
+            return;
+        }
+        Villager villager = event.getVillager();
+        BV.villagers().get(villager.getUniqueId().toString())
+                .ifPresent(bv -> BV.socialEngine().recordTrade(bv, 1));
+    }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onInteractVillager(PlayerInteractEntityEvent event) {

@@ -113,6 +113,11 @@ public final class TradeService {
      * 返回可直接设置到 {@link org.bukkit.entity.Villager#setRecipes(List)} 的列表。
      */
     public List<MerchantRecipe> generateOffers(BVillager merchant) {
+        return generateOffers(merchant, 0.0);
+    }
+
+    public List<MerchantRecipe> generateOffers(BVillager merchant, double discount) {
+        discount = Math.min(0.5, Math.max(0.0, discount));
         List<MerchantRecipe> recipes = new ArrayList<>();
         if (merchant == null || merchant.profession() == null) {
             return recipes;
@@ -121,9 +126,10 @@ public final class TradeService {
         List<TradeOffer> defs = BV.professions().tradesOf(prof);
         for (TradeOffer def : defs) {
             ItemStack result = BV.professions().buildTradeItem(def);
-            int price = def.minPrice() + (def.maxPrice() > def.minPrice()
+            int basePrice = def.minPrice() + (def.maxPrice() > def.minPrice()
                     ? ThreadLocalRandom.current().nextInt(def.maxPrice() - def.minPrice() + 1)
                     : 0);
+            int price = Math.max(1, (int) Math.floor(basePrice * (1.0 - discount)));
             // 随机库存（每次重新生成时刷新）
             int maxUses = 8 + ThreadLocalRandom.current().nextInt(8);
             MerchantRecipe recipe = new MerchantRecipe(result, 0, maxUses, true);
@@ -138,6 +144,14 @@ public final class TradeService {
             recipes.add(recipe);
         }
         return recipes;
+    }
+
+    public double friendshipDiscount(BVillager a, BVillager b) {
+        return a == null || b == null ? 0.0 : 0.05;
+    }
+
+    public double friendshipDiscount(int friendship) {
+        return Math.min(0.5, Math.max(0.0, friendship / 100.0 * 0.5));
     }
 
     /** 选取该职业的第二交易材料（提升交易丰富度）。 */

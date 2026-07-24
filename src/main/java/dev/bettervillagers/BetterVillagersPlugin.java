@@ -124,8 +124,8 @@ public final class BetterVillagersPlugin extends JavaPlugin {
             pluginCmd.setExecutor(cmd);
             pluginCmd.setTabCompleter(cmd);
         }
-        Bukkit.getPluginManager().registerEvents(new VillagerListener(), this);
         Bukkit.getPluginManager().registerEvents(new VillageEntryListener(), this);
+        Bukkit.getPluginManager().registerEvents(new VillagerListener(), this);
 
         // 11. 启动周期任务 + 注册已加载村民
         villagers.startTicking(
