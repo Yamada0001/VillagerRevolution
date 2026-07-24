@@ -1,0 +1,348 @@
+# ============================================================
+# BetterVillagers 职业数据（规范 2.x / 6.3）
+# ver: 配置版本号（勿手动修改，由 Ver.java 控制）
+# 每个职业：stats / equipment / 行为权重 / 性格 / 方块白名单 / 交易商品
+# trades（问题6）：每个职业的丰富交易列表，支持附魔装备/武器/工具
+#   - material: 物品材质
+#     amount: 数量（默认 1）
+#     min-price / max-price: 绿宝石价格区间
+#     enchants: 附魔列表 [{name, level}]
+# ============================================================
+ver: 2
+professions:
+  # ============ 国王（每村唯一，不参与常规加权） ============
+  king:
+    enabled: true
+    max-per-village: 1
+    spawn-weight: 0
+    inherit-rate: 0.0
+    stats:
+      # 贴合原版：村民基础 20HP，国王略高
+      health: 30
+      attack: 6
+      defense: MEDIUM
+    equipment:
+      main-hand: { material: GOLDEN_SWORD, custom-model-data: 1001 }
+      helmet: { material: GOLDEN_HELMET, custom-model-data: 1002 }
+      chestplate: { material: GOLDEN_CHESTPLATE, custom-model-data: 1003 }
+    durability-loss-rate: 0.5
+    behavior-weights:
+      command: 0.6
+      build: 0.2
+      trade: 0.2
+    personality: { bravery: 0.8, greed: 0.5 }
+    block-whitelist: []
+    trades:
+      - { material: GOLDEN_SWORD, amount: 1, min-price: 32, max-price: 64,
+          enchants: [ {name: SHARPNESS, level: 5}, {name: UNBREAKING, level: 3}, {name: FIRE_ASPECT, level: 2} ] }
+      - { material: GOLDEN_APPLE, amount: 2, min-price: 24, max-price: 40 }
+      - { material: ENCHANTED_GOLDEN_APPLE, amount: 1, min-price: 64, max-price: 96 }
+      - { material: GOLDEN_HELMET, amount: 1, min-price: 28, max-price: 48,
+          enchants: [ {name: PROTECTION, level: 4}, {name: UNBREAKING, level: 3} ] }
+      - { material: TOTEM_OF_UNDYING, amount: 1, min-price: 80, max-price: 120 }
+
+  # ============ 骑士 ============
+  knight:
+    enabled: true
+    max-per-village: 5
+    spawn-weight: 10
+    inherit-rate: 0.3
+    stats:
+      health: 28
+      attack: 7
+      defense: MEDIUM
+    equipment:
+      main-hand: { material: IRON_SWORD, custom-model-data: 2001 }
+      off-hand: { material: SHIELD, custom-model-data: 2002 }
+      chestplate: { material: IRON_CHESTPLATE }
+    durability-loss-rate: 1.0
+    behavior-weights:
+      patrol: 0.4
+      combat: 0.5
+      rest: 0.1
+    personality: { bravery: 0.9, greed: 0.2 }
+    block-whitelist: []
+    trades:
+      - { material: IRON_SWORD, amount: 1, min-price: 12, max-price: 24,
+          enchants: [ {name: SHARPNESS, level: 4}, {name: UNBREAKING, level: 3}, {name: KNOCKBACK, level: 2} ] }
+      - { material: IRON_CHESTPLATE, amount: 1, min-price: 16, max-price: 32,
+          enchants: [ {name: PROTECTION, level: 3}, {name: UNBREAKING, level: 2} ] }
+      - { material: SHIELD, amount: 1, min-price: 6, max-price: 12 }
+      - { material: IRON_HELMET, amount: 1, min-price: 8, max-price: 16,
+          enchants: [ {name: PROTECTION, level: 2} ] }
+      - { material: IRON_LEGGINGS, amount: 1, min-price: 12, max-price: 22,
+          enchants: [ {name: PROTECTION, level: 3}, {name: UNBREAKING, level: 2} ] }
+      - { material: DIAMOND_SWORD, amount: 1, min-price: 28, max-price: 48,
+          enchants: [ {name: SHARPNESS, level: 5}, {name: LOOTING, level: 3}, {name: FIRE_ASPECT, level: 2} ] }
+
+  # ============ 士兵 ============
+  soldier:
+    enabled: true
+    max-per-village: 8
+    spawn-weight: 10
+    inherit-rate: 0.3
+    stats:
+      health: 24
+      attack: 5
+      defense: LOW
+    equipment:
+      main-hand: { material: IRON_SWORD }
+      chestplate: { material: IRON_CHESTPLATE }
+    durability-loss-rate: 1.0
+    behavior-weights:
+      combat: 0.6
+      patrol: 0.3
+      rest: 0.1
+    personality: { bravery: 0.7, greed: 0.3 }
+    block-whitelist: []
+    trades:
+      - { material: IRON_SWORD, amount: 1, min-price: 10, max-price: 18,
+          enchants: [ {name: SHARPNESS, level: 3}, {name: UNBREAKING, level: 2} ] }
+      - { material: IRON_AXE, amount: 1, min-price: 8, max-price: 14,
+          enchants: [ {name: SHARPNESS, level: 3}, {name: EFFICIENCY, level: 2} ] }
+      - { material: CHAINMAIL_CHESTPLATE, amount: 1, min-price: 10, max-price: 18,
+          enchants: [ {name: PROTECTION, level: 2} ] }
+      - { material: STONE_SWORD, amount: 1, min-price: 2, max-price: 5,
+          enchants: [ {name: SHARPNESS, level: 2} ] }
+      - { material: CROSSBOW, amount: 1, min-price: 12, max-price: 20,
+          enchants: [ {name: POWER, level: 3}, {name: UNBREAKING, level: 2} ] }
+
+  # ============ 弓箭手 ============
+  archer:
+    enabled: true
+    max-per-village: 4
+    spawn-weight: 3
+    inherit-rate: 0.3
+    stats:
+      health: 22
+      attack: 4
+      defense: LOW
+    equipment:
+      main-hand: { material: BOW }
+      chestplate: { material: LEATHER_CHESTPLATE, color: "0x4B8B3B" }
+    durability-loss-rate: 0.8
+    behavior-weights:
+      combat: 0.6
+      patrol: 0.3
+      rest: 0.1
+    personality: { bravery: 0.6, greed: 0.3 }
+    block-whitelist: []
+    trades:
+      - { material: BOW, amount: 1, min-price: 8, max-price: 18,
+          enchants: [ {name: POWER, level: 4}, {name: PUNCH, level: 2}, {name: UNBREAKING, level: 3} ] }
+      - { material: ARROW, amount: 16, min-price: 2, max-price: 5 }
+      - { material: CROSSBOW, amount: 1, min-price: 12, max-price: 24,
+          enchants: [ {name: POWER, level: 4}, {name: QUICK_CHARGE, level: 3} ] }
+      - { material: TIPPED_ARROW, amount: 8, min-price: 6, max-price: 12 }
+      - { material: LEATHER_CHESTPLATE, amount: 1, min-price: 4, max-price: 8,
+          enchants: [ {name: PROTECTION, level: 2} ] }
+
+  # ============ 屠夫 ============
+  butcher:
+    enabled: true
+    max-per-village: 3
+    spawn-weight: 5
+    inherit-rate: 0.3
+    stats:
+      health: 22
+      attack: 4
+      defense: LOW
+    equipment:
+      main-hand: { material: IRON_AXE }
+    durability-loss-rate: 1.0
+    behavior-weights:
+      trade: 0.5
+      process: 0.3
+      rest: 0.2
+    personality: { bravery: 0.5, greed: 0.5 }
+    block-whitelist: []
+    trades:
+      - { material: COOKED_BEEF, amount: 8, min-price: 3, max-price: 6 }
+      - { material: COOKED_PORKCHOP, amount: 8, min-price: 3, max-price: 6 }
+      - { material: COOKED_CHICKEN, amount: 8, min-price: 2, max-price: 5 }
+      - { material: IRON_AXE, amount: 1, min-price: 6, max-price: 12,
+          enchants: [ {name: SHARPNESS, level: 3}, {name: EFFICIENCY, level: 2} ] }
+      - { material: LEATHER, amount: 8, min-price: 2, max-price: 4 }
+      - { material: COOKED_MUTTON, amount: 8, min-price: 3, max-price: 5 }
+
+  # ============ 厨师 ============
+  chef:
+    enabled: true
+    max-per-village: 3
+    spawn-weight: 5
+    inherit-rate: 0.3
+    stats:
+      health: 20
+      attack: 2
+      defense: LOW
+    equipment: {}
+    durability-loss-rate: 0.8
+    behavior-weights:
+      craft: 0.6
+      trade: 0.2
+      rest: 0.2
+    personality: { bravery: 0.2, greed: 0.4 }
+    block-whitelist:
+      - CRAFTING_TABLE
+      - SMOKER
+      - FURNACE
+    trades:
+      - { material: BREAD, amount: 16, min-price: 1, max-price: 3 }
+      - { material: CAKE, amount: 1, min-price: 6, max-price: 12 }
+      - { material: COOKED_BEEF, amount: 12, min-price: 3, max-price: 6 }
+      - { material: PUMPKIN_PIE, amount: 8, min-price: 2, max-price: 5 }
+      - { material: GOLDEN_CARROT, amount: 8, min-price: 8, max-price: 16 }
+      - { material: COOKIE, amount: 16, min-price: 2, max-price: 4 }
+
+  # ============ 农民 ============
+  farmer:
+    enabled: true
+    max-per-village: 10
+    spawn-weight: 20
+    inherit-rate: 0.3
+    stats:
+      health: 20
+      attack: 2
+      defense: LOW
+    equipment:
+      main-hand: { material: WOODEN_HOE, custom-model-data: 3001 }
+    durability-loss-rate: 0.8
+    behavior-weights:
+      farm: 0.7
+      trade: 0.2
+      rest: 0.1
+    personality: { bravery: 0.2, greed: 0.4 }
+    block-whitelist:
+      - FARMLAND
+      - WHEAT
+      - CARROTS
+      - POTATOES
+      - BEETROOTS
+    trades:
+      - { material: WHEAT, amount: 16, min-price: 1, max-price: 3 }
+      - { material: CARROT, amount: 16, min-price: 1, max-price: 3 }
+      - { material: POTATO, amount: 16, min-price: 1, max-price: 3 }
+      - { material: BEETROOT, amount: 16, min-price: 1, max-price: 3 }
+      - { material: BREAD, amount: 8, min-price: 1, max-price: 4 }
+      - { material: PUMPKIN, amount: 4, min-price: 1, max-price: 3 }
+      - { material: MELON_SLICE, amount: 16, min-price: 1, max-price: 2 }
+      - { material: HAY_BLOCK, amount: 2, min-price: 2, max-price: 4 }
+
+  # ============ 矿工 ============
+  miner:
+    enabled: true
+    max-per-village: 4
+    spawn-weight: 3
+    inherit-rate: 0.3
+    stats:
+      health: 22
+      attack: 3
+      defense: LOW
+    equipment:
+      main-hand: { material: IRON_PICKAXE, custom-model-data: 4001 }
+      helmet: { material: IRON_HELMET }
+    durability-loss-rate: 1.2
+    behavior-weights:
+      mine: 0.7
+      rest: 0.3
+    personality: { bravery: 0.5, greed: 0.6 }
+    block-whitelist:
+      - STONE
+      - COAL_ORE
+      - IRON_ORE
+      - GOLD_ORE
+      - DIAMOND_ORE
+      - ".*_ORE"
+    trades:
+      - { material: COAL, amount: 16, min-price: 2, max-price: 4 }
+      - { material: IRON_INGOT, amount: 8, min-price: 4, max-price: 8 }
+      - { material: GOLD_INGOT, amount: 4, min-price: 6, max-price: 12 }
+      - { material: DIAMOND, amount: 2, min-price: 16, max-price: 32 }
+      - { material: IRON_PICKAXE, amount: 1, min-price: 8, max-price: 16,
+          enchants: [ {name: EFFICIENCY, level: 4}, {name: UNBREAKING, level: 3}, {name: FORTUNE, level: 2} ] }
+      - { material: REDSTONE, amount: 16, min-price: 2, max-price: 5 }
+      - { material: LAPIS_LAZULI, amount: 16, min-price: 2, max-price: 5 }
+
+  # ============ 建筑师 ============
+  builder:
+    enabled: true
+    max-per-village: 4
+    spawn-weight: 3
+    inherit-rate: 0.3
+    stats:
+      health: 20
+      attack: 2
+      defense: LOW
+    equipment: {}
+    durability-loss-rate: 1.0
+    behavior-weights:
+      build: 0.7
+      rest: 0.3
+    personality: { bravery: 0.3, greed: 0.3 }
+    block-whitelist:
+      - ".*_PLANKS"
+      - ".*_LOG"
+      - COBBLESTONE
+      - STONE_BRICKS
+      - GLASS
+      - BRICKS
+    trades:
+      - { material: BRICKS, amount: 16, min-price: 2, max-price: 5 }
+      - { material: GLASS, amount: 16, min-price: 1, max-price: 3 }
+      - { material: OAK_PLANKS, amount: 32, min-price: 1, max-price: 3 }
+      - { material: STONE_BRICKS, amount: 32, min-price: 1, max-price: 3 }
+      - { material: LANTERN, amount: 8, min-price: 2, max-price: 5 }
+      - { material: IRON_PICKAXE, amount: 1, min-price: 6, max-price: 12,
+          enchants: [ {name: EFFICIENCY, level: 3}, {name: SILK_TOUCH, level: 1} ] }
+
+  # ============ 商人 ============
+  merchant:
+    enabled: true
+    max-per-village: 3
+    spawn-weight: 5
+    inherit-rate: 0.3
+    stats:
+      health: 20
+      attack: 2
+      defense: LOW
+    equipment: {}
+    durability-loss-rate: 0.5
+    behavior-weights:
+      trade: 0.8
+      rest: 0.2
+    personality: { bravery: 0.2, greed: 0.8 }
+    block-whitelist: []
+    trades:
+      - { material: EXPERIENCE_BOTTLE, amount: 8, min-price: 6, max-price: 12 }
+      - { material: BOOKSHELF, amount: 4, min-price: 4, max-price: 8 }
+      - { material: ENCHANTED_BOOK, amount: 1, min-price: 16, max-price: 32,
+          enchants: [ {name: UNBREAKING, level: 3} ] }
+      - { material: NAME_TAG, amount: 2, min-price: 8, max-price: 16 }
+      - { material: SADDLE, amount: 1, min-price: 6, max-price: 12 }
+      - { material: ENDER_PEARL, amount: 4, min-price: 12, max-price: 24 }
+      - { material: REDSTONE, amount: 16, min-price: 2, max-price: 5 }
+      - { material: GOLDEN_APPLE, amount: 2, min-price: 16, max-price: 28 }
+
+  # ============ 普通人 ============
+  civilian:
+    enabled: true
+    max-per-village: 0
+    spawn-weight: 40
+    inherit-rate: 0.0
+    stats:
+      health: 20
+      attack: 2
+      defense: LOW
+    equipment: {}
+    durability-loss-rate: 0.5
+    behavior-weights:
+      idle: 0.6
+      work: 0.2
+      rest: 0.2
+    personality: { bravery: 0.3, greed: 0.3 }
+    block-whitelist: []
+    trades:
+      - { material: BREAD, amount: 8, min-price: 1, max-price: 2 }
+      - { material: WHEAT_SEEDS, amount: 16, min-price: 1, max-price: 2 }
+      - { material: STICK, amount: 16, min-price: 1, max-price: 2 }
+      - { material: TORCH, amount: 16, min-price: 1, max-price: 3 }
