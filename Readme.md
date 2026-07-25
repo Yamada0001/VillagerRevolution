@@ -4,7 +4,7 @@
 ### 插件介绍
 - 编译:Maven Java21＋
 - 适配平台:PaperMC26.2 Folia26.1.2＋
-- Agent:ClaudeFable5 GLM5.2 GPT5.6Luna Grok4.5
+- 大模型:ClaudeFable5 GLM5.2 GPT5.6Luna Grok4.5
 
 ### 核心功能介绍
 - 村庄内部的阶级职业分化
