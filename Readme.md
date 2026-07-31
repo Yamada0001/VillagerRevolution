@@ -1,6 +1,15 @@
 ## Hi Welcome to see this VibeCoding product
 > The core functionality of this plugin is to greatly enrich the interactivity and functionality of Minecraft villager AI.
 
+<p align="center">
+  <img alt="Maven" src="https://img.shields.io/badge/Maven-C71A36?style=plastic&logo=apachemaven&logoColor=white">
+  <img alt="Java 25" src="https://img.shields.io/badge/Java-25-FF5CAD?style=plastic&logo=openjdk&logoColor=111111&labelColor=FFFFFF">
+  <img alt="Bukkit 26.2" src="https://img.shields.io/badge/Bukkit-26.2-FF8A00?style=plastic&logo=minecraft&logoColor=111111&labelColor=FFD43B">
+  <img alt="Paper 26.2" src="https://img.shields.io/badge/Paper-26.2-00A3FF?style=plastic&logo=minecraft&logoColor=white&labelColor=A855F7">
+  <img alt="Folia 26.2" src="https://img.shields.io/badge/Folia-26.2-FF8A00?style=plastic&logo=minecraft&logoColor=white&labelColor=22C55E">
+  <a href="https://github.com/Yamada0001/VillagerRevolution/releases"><img alt="GitHub Releases downloads" src="https://img.shields.io/github/downloads/Yamada0001/VillagerRevolution/total?style=plastic&logo=github&logoColor=white&label=GitHub%20Releases&labelColor=6366F1&color=38BDF8"></a>
+</p>
+
 ### 插件介绍
 - 编译:Maven Java21＋
 - 适配平台:PaperMC26.2 Folia26.1.2＋
@@ -372,3 +381,7 @@ RPG服: 职业分化 + 对话 + 外交 + 王朝式发展 叙事感拉满
 > 想怎么演 提示词你说了算。
 
 > 如果你喜欢该项目 请点个Star吧⭐(○｀ 3′○)
+
+<p align="center">
+  <a href="https://www.star-history.com/#Yamada0001/VillagerRevolution&Date"><img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Yamada0001/VillagerRevolution&type=Date"></a>
+</p>
