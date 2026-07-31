@@ -10,7 +10,6 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 /** 生电保护区仓储（规范 8.x）。阻塞 IO，须在异步线程调用。 */
 public final class RegionRepository {
@@ -81,19 +80,6 @@ public final class RegionRepository {
             throw new RuntimeException(BV.messages().raw("errors.region-query").replace("{error}", e.getMessage()), e);
         }
         return out;
-    }
-
-    public Optional<ProtectedRegion> findByName(String name) {
-        try (Connection c = provider.connection();
-             PreparedStatement ps = c.prepareStatement("SELECT * FROM protected_regions WHERE name=?")) {
-            ps.setString(1, name);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.of(map(rs)) : Optional.empty();
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException(BV.messages().raw("errors.region-query-name")
-                    .replace("{name}", name).replace("{error}", e.getMessage()), e);
-        }
     }
 
     private void bind(PreparedStatement ps, ProtectedRegion r) throws SQLException {

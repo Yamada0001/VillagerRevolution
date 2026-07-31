@@ -1,212 +1,196 @@
 package dev.bettervillagers.building;
 
-import org.bukkit.Location;
+import dev.bettervillagers.storage.BuildLayoutRecord;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 建筑缓存（修复重复堆叠）。
- * <p>
- * 规则：
- * <ul>
- *   <li>触发：仅在施工任务<strong>真正启动</strong>时写入，失败/取消不占位</li>
- *   <li>存储：村庄 + 类型 + 网格坐标；另记精确坐标做间距检测</li>
- *   <li>清理：可选按村庄重置；完工保留防重复，不无限增长同类型</li>
- *   <li>上限：同类型 maxPerVillage；同网格不可重复；最小间距 minSpacing</li>
- * </ul>
+ * Runtime occupancy cache for completed and in-progress buildings.
  */
 public final class BuildCache {
 
-    /** gridKey -> occupied */
     private final Set<String> gridOccupied = ConcurrentHashMap.newKeySet();
-    /** villageId:type -> count */
     private final Map<String, AtomicInteger> typeCounts = new ConcurrentHashMap<>();
-    /** 精确坐标记录，用于间距：village:type:x:z */
     private final Set<String> preciseSites = ConcurrentHashMap.newKeySet();
-    /** 村庄当前发展阶段完成度（阶段内已完成任务数）。 */
-    private final Map<Integer, Map<BuildType.DevPhase, AtomicInteger>> phaseProgress = new ConcurrentHashMap<>();
+    private final Set<Footprint> footprints = ConcurrentHashMap.newKeySet();
+    private final Map<String, BuildLayoutRecord> completed = new ConcurrentHashMap<>();
 
     public int count(int villageId, BuildType type) {
-        AtomicInteger c = typeCounts.get(countKey(villageId, type));
-        return c == null ? 0 : c.get();
+        AtomicInteger count = typeCounts.get(countKey(villageId, type));
+        return count == null ? 0 : count.get();
     }
 
-    /**
-     * 清理指定村庄的全部缓存（村庄合并/删除时调用，规范 4.x：避免 stale 条目残留）。
-     */
-    public void clear(int villageId) {
-        phaseProgress.remove(villageId);
+    void clear(int villageId) {
         String prefix = villageId + ":";
-        typeCounts.keySet().removeIf(k -> k.startsWith(prefix));
-        preciseSites.removeIf(k -> k.startsWith(prefix));
-        gridOccupied.removeIf(k -> k.startsWith(prefix));
+        typeCounts.keySet().removeIf(key -> key.startsWith(prefix));
+        preciseSites.removeIf(key -> key.startsWith(prefix));
+        footprints.removeIf(footprint -> footprint.villageId == villageId);
+        gridOccupied.removeIf(key -> key.startsWith(prefix));
+        completed.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
-    public int phaseDone(int villageId, BuildType.DevPhase phase) {
-        Map<BuildType.DevPhase, AtomicInteger> m = phaseProgress.get(villageId);
-        if (m == null) {
-            return 0;
-        }
-        AtomicInteger c = m.get(phase);
-        return c == null ? 0 : c.get();
-    }
-
-    /**
-     * 尝试占用建造位。成功返回 true 并写入缓存；失败返回 false（不应开工）。
-     */
-    public boolean tryOccupy(int villageId, BuildType type, String world, int x, int y, int z) {
+    boolean tryOccupy(int villageId, BuildType type, String world, int x, int z,
+                      int minX, int maxX, int minZ, int maxZ) {
         if (type == null || !type.physical()) {
             return true;
         }
-        if (count(villageId, type) >= type.maxPerVillage()) {
+        if (!canPlaceFootprint(villageId, type, world, x, z, minX, maxX, minZ, maxZ)) {
             return false;
         }
         String grid = gridKey(villageId, type, world, x, z);
-        if (gridOccupied.contains(grid)) {
-            return false;
-        }
-        if (tooClose(villageId, type, world, x, z)) {
-            return false;
-        }
-        // 原子占位
         if (!gridOccupied.add(grid)) {
             return false;
         }
         preciseSites.add(preciseKey(villageId, type, world, x, z));
-        typeCounts.computeIfAbsent(countKey(villageId, type), k -> new AtomicInteger(0)).incrementAndGet();
+        typeCounts.computeIfAbsent(countKey(villageId, type), ignored -> new AtomicInteger()).incrementAndGet();
+        footprints.add(new Footprint(villageId, world, minX, maxX, minZ, maxZ));
         return true;
     }
 
-    /** 任务取消时释放（完工不释放，防止原地再建同类型）。 */
-    public void releaseOnCancel(int villageId, BuildType type, String world, int x, int y, int z) {
+    void releaseOnCancel(int villageId, BuildType type, String world, int x, int z) {
         if (type == null || !type.physical()) {
             return;
         }
         gridOccupied.remove(gridKey(villageId, type, world, x, z));
         preciseSites.remove(preciseKey(villageId, type, world, x, z));
-        AtomicInteger c = typeCounts.get(countKey(villageId, type));
-        if (c != null) {
-            c.updateAndGet(v -> Math.max(0, v - 1));
+        footprints.removeIf(footprint -> footprint.villageId == villageId
+                && footprint.world.equals(world)
+                && x >= footprint.minX && x <= footprint.maxX
+                && z >= footprint.minZ && z <= footprint.maxZ);
+        AtomicInteger count = typeCounts.get(countKey(villageId, type));
+        if (count != null) {
+            count.updateAndGet(value -> Math.max(0, value - 1));
         }
     }
 
-    /** 完工：标记阶段进度。 */
-    public void markCompleted(int villageId, BuildType type) {
+    private boolean canPlaceAt(int villageId, BuildType type, org.bukkit.Location loc) {
+        if (loc == null || loc.getWorld() == null || type == null) {
+            return false;
+        }
+        int halfSize = defaultHalfSize(type);
+        return canPlaceFootprint(villageId, type, loc.getWorld().getName(),
+                loc.getBlockX(), loc.getBlockZ(),
+                loc.getBlockX() - halfSize, loc.getBlockX() + halfSize,
+                loc.getBlockZ() - halfSize, loc.getBlockZ() + halfSize);
+    }
+
+    boolean canPlaceFootprint(int villageId, BuildType type, String world, int x, int z,
+                              int minX, int maxX, int minZ, int maxZ) {
+        if (count(villageId, type) >= type.maxPerVillage()
+                || gridOccupied.contains(gridKey(villageId, type, world, x, z))
+                || tooClose(villageId, type, world, x, z)) {
+            return false;
+        }
+        Footprint candidate = new Footprint(villageId, world, minX, maxX, minZ, maxZ);
+        return footprints.stream().noneMatch(footprint -> footprint.overlaps(candidate));
+    }
+
+    void rememberCompleted(BuildLayoutRecord record) {
+        completed.put(record.villageId() + ":" + record.world() + ":" + record.centerX() + ":" + record.centerZ(), record);
+    }
+
+    List<BuildLayoutRecord> exportVillage(int villageId) {
+        return completed.values().stream().filter(record -> record.villageId() == villageId).toList();
+    }
+
+    Set<String> completedClusters(int villageId) {
+        return completed.values().stream()
+                .filter(record -> record.villageId() == villageId
+                        && record.clusterId() != null
+                        && !record.clusterId().isBlank())
+                .map(BuildLayoutRecord::clusterId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    void restore(BuildLayoutRecord record) {
+        BuildType type = BuildType.fromCommand(record.buildType());
         if (type == null) {
             return;
         }
-        phaseProgress
-                .computeIfAbsent(villageId, k -> new ConcurrentHashMap<>())
-                .computeIfAbsent(type.phase(), k -> new AtomicInteger(0))
-                .incrementAndGet();
+        tryOccupy(record.villageId(), type, record.world(), record.centerX(), record.centerZ(),
+                record.minX(), record.maxX(), record.minZ(), record.maxZ());
+        rememberCompleted(record);
     }
 
-    /**
-     * 寻找合法建造点：螺旋搜索，满足网格+间距+上限。
-     * 找不到返回 null（禁止回退到原点硬建）。
-     */
-    public Location findFreeLocation(int villageId, BuildType type, Location preferred) {
-        if (preferred == null || preferred.getWorld() == null || type == null) {
-            return null;
-        }
-        if (count(villageId, type) >= type.maxPerVillage()) {
+    org.bukkit.Location findFreeLocation(int villageId, BuildType type, org.bukkit.Location preferred) {
+        if (preferred == null || preferred.getWorld() == null || count(villageId, type) >= type.maxPerVillage()) {
             return null;
         }
         if (canPlaceAt(villageId, type, preferred)) {
             return preferred.clone();
         }
-        String world = preferred.getWorld().getName();
-        int baseX = preferred.getBlockX();
-        int baseY = preferred.getBlockY();
-        int baseZ = preferred.getBlockZ();
         int step = Math.max(type.minSpacing(), type.gridSize() / 2);
-        for (int ring = 1; ring <= 6; ring++) {
-            int dist = ring * step;
+        for (int radius = 1; radius <= 6; radius++) {
             for (int angle = 0; angle < 360; angle += 30) {
-                double rad = Math.toRadians(angle);
-                int x = baseX + (int) Math.round(Math.cos(rad) * dist);
-                int z = baseZ + (int) Math.round(Math.sin(rad) * dist);
-                Location cand = new Location(preferred.getWorld(), x, baseY, z);
-                if (canPlaceAt(villageId, type, cand)) {
-                    return cand;
+                int x = preferred.getBlockX() + (int) Math.round(Math.cos(Math.toRadians(angle)) * radius * step);
+                int z = preferred.getBlockZ() + (int) Math.round(Math.sin(Math.toRadians(angle)) * radius * step);
+                var candidate = new org.bukkit.Location(preferred.getWorld(), x, preferred.getBlockY(), z);
+                if (canPlaceAt(villageId, type, candidate)) {
+                    return candidate;
                 }
             }
         }
         return null;
     }
 
-    public boolean canPlaceAt(int villageId, BuildType type, Location loc) {
-        if (loc == null || loc.getWorld() == null || type == null || !type.physical()) {
-            return type != null && !type.physical();
-        }
-        if (count(villageId, type) >= type.maxPerVillage()) {
-            return false;
-        }
-        String world = loc.getWorld().getName();
-        int x = loc.getBlockX();
-        int z = loc.getBlockZ();
-        if (gridOccupied.contains(gridKey(villageId, type, world, x, z))) {
-            return false;
-        }
-        return !tooClose(villageId, type, world, x, z);
-    }
-
     private boolean tooClose(int villageId, BuildType type, String world, int x, int z) {
-        int minSq = type.minSpacing() * type.minSpacing();
+        int minDistanceSq = type.minSpacing() * type.minSpacing();
         String prefix = villageId + ":" + type.name() + ":" + world + ":";
         for (String site : preciseSites) {
             if (!site.startsWith(prefix)) {
                 continue;
             }
-            String[] p = site.split(":");
-            if (p.length < 5) {
-                continue;
-            }
-            try {
-                int sx = Integer.parseInt(p[3]);
-                int sz = Integer.parseInt(p[4]);
-                int dx = sx - x;
-                int dz = sz - z;
-                if (dx * dx + dz * dz < minSq) {
-                    return true;
-                }
-            } catch (NumberFormatException ignored) {
+            String[] parts = site.split(":");
+            int dx = Integer.parseInt(parts[3]) - x;
+            int dz = Integer.parseInt(parts[4]) - z;
+            if (dx * dx + dz * dz < minDistanceSq) {
+                return true;
             }
         }
         return false;
     }
 
-    private static String countKey(int villageId, BuildType type) {
-        return villageId + ":" + type.name();
+    private static int defaultHalfSize(BuildType type) {
+        return Math.max(3, type.minSpacing() / 2 + 2);
     }
 
-    private static String gridKey(int villageId, BuildType type, String world, int x, int z) {
-        int g = Math.max(1, type.gridSize());
-        int gx = Math.floorDiv(x, g);
-        int gz = Math.floorDiv(z, g);
-        return villageId + ":" + type.name() + ":" + world + ":" + gx + ":" + gz;
+    private static String countKey(int id, BuildType type) {
+        return id + ":" + type.name();
     }
 
-    private static String preciseKey(int villageId, BuildType type, String world, int x, int z) {
-        return villageId + ":" + type.name() + ":" + world + ":" + x + ":" + z;
+    private static String gridKey(int id, BuildType type, String world, int x, int z) {
+        return id + ":" + type.name() + ":" + world + ":"
+                + Math.floorDiv(x, Math.max(1, type.gridSize())) + ":"
+                + Math.floorDiv(z, Math.max(1, type.gridSize()));
     }
 
-    /** 道路阶段是否达标（至少 N 段路）。 */
-    public boolean roadsComplete(int villageId, int required) {
-        return count(villageId, BuildType.ROAD) >= required;
+    private static String preciseKey(int id, BuildType type, String world, int x, int z) {
+        return id + ":" + type.name() + ":" + world + ":" + x + ":" + z;
     }
 
-    public boolean streetscapeComplete(int villageId, int required) {
-        return count(villageId, BuildType.STREETSCAPE) >= required;
+    boolean roadsComplete(int id, int needed) {
+        return count(id, BuildType.ROAD) >= needed;
     }
 
-    public boolean housingComplete(int villageId, int houseReq, int upgradeReq) {
-        int houses = count(villageId, BuildType.HOUSE);
-        int upgrades = count(villageId, BuildType.UPGRADE_HOUSE);
-        // 须同时满足：存量房屋达标 + 升级量达标（避免过早进入城墙阶段）
-        return houses + upgrades >= houseReq && upgrades >= upgradeReq;
+    boolean streetscapeComplete(int id, int needed) {
+        return count(id, BuildType.STREETSCAPE) >= needed;
+    }
+
+    boolean housingComplete(int id, int housesNeeded, int upgradesNeeded) {
+        return count(id, BuildType.HOUSE) + count(id, BuildType.UPGRADE_HOUSE) >= housesNeeded
+                && count(id, BuildType.UPGRADE_HOUSE) >= upgradesNeeded;
+    }
+
+    private record Footprint(int villageId, String world, int minX, int maxX, int minZ, int maxZ) {
+        boolean overlaps(Footprint other) {
+            return villageId == other.villageId
+                    && world.equals(other.world)
+                    && minX <= other.maxX && maxX >= other.minX
+                    && minZ <= other.maxZ && maxZ >= other.minZ;
+        }
     }
 }

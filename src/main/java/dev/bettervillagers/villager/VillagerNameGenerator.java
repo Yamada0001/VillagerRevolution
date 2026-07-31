@@ -28,9 +28,15 @@ public final class VillagerNameGenerator {
         List<String> suffixes = BV.messages().rawList("names.villager-suffix");
         List<String> titles = BV.messages().rawList("names.villager-title");
         // 兜底：lang 文件未加载时使用 i18n 默认名，避免在代码中硬编码可见文本（用户规则：禁止硬编码）
-        if (prefixes.isEmpty()) prefixes = List.of(BV.messages().raw("villager-default"));
-        if (suffixes.isEmpty()) suffixes = List.of(BV.messages().raw("villager-default"));
-        if (titles.isEmpty()) titles = List.of("");
+        if (prefixes.isEmpty()) {
+            prefixes = List.of(BV.messages().raw("villager-default"));
+        }
+        if (suffixes.isEmpty()) {
+            suffixes = List.of(BV.messages().raw("villager-default"));
+        }
+        if (titles.isEmpty()) {
+            titles = List.of("");
+        }
 
         ThreadLocalRandom rng = ThreadLocalRandom.current();
         String part1 = prefixes.get(rng.nextInt(prefixes.size()));
@@ -66,7 +72,7 @@ public final class VillagerNameGenerator {
                     }
                     // AI 失败/降级时不回调，保持规则引擎兜底名字
                 })
-                .exceptionally(ex -> null);
+                .exceptionally(ignored -> null);
     }
 
     /** 清洗 AI 返回的名字；返回 null 表示不可用（应保持兜底名字）。 */
@@ -76,7 +82,7 @@ public final class VillagerNameGenerator {
         }
         String name = r.text().trim()
                 .replaceAll("[\"'`]", "")
-                .replaceAll("[\\p{Punct}]", "")
+                .replaceAll("\\p{Punct}", "")
                 .replaceAll("\\s+", "")
                 .trim();
         // 过滤 AI 协议关键词（避免 WORK/FLEE 等被当作名字）

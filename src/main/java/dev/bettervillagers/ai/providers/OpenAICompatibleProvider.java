@@ -46,18 +46,7 @@ public class OpenAICompatibleProvider implements AIProvider {
     @Override
     public String completeBlocking(AIRequest req) throws AIException {
         String model = (req.model() == null || req.model().isBlank()) ? defaultModel : req.model();
-        JsonObject body = new JsonObject();
-        body.addProperty("model", model);
-        body.addProperty("temperature", req.temperature());
-        body.addProperty("max_tokens", req.maxTokens());
-        JsonArray messages = new JsonArray();
-        for (AIRequest.Message m : req.messages()) {
-            JsonObject o = new JsonObject();
-            o.addProperty("role", m.role());
-            o.addProperty("content", m.content());
-            messages.add(o);
-        }
-        body.add("messages", messages);
+        JsonObject body = requestBody(req, model);
 
         String url = endpoint.replaceAll("/+$", "") + "/chat/completions";
         try {
@@ -94,6 +83,22 @@ public class OpenAICompatibleProvider implements AIProvider {
             throw new AIException(dev.bettervillagers.BV.messages().raw("log.provider-call-fail")
                     .replace("{provider}", id).replace("{error}", e.getMessage()), e, true);
         }
+    }
+
+    private static JsonObject requestBody(AIRequest req, String model) {
+        JsonObject body = new JsonObject();
+        body.addProperty("model", model);
+        body.addProperty("temperature", req.temperature());
+        body.addProperty("max_tokens", req.maxTokens());
+        JsonArray messages = new JsonArray();
+        for (AIRequest.Message m : req.messages()) {
+            JsonObject o = new JsonObject();
+            o.addProperty("role", m.role());
+            o.addProperty("content", m.content());
+            messages.add(o);
+        }
+        body.add("messages", messages);
+        return body;
     }
 
     private static String truncate(String s) {

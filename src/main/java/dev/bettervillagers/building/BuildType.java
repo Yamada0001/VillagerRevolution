@@ -35,7 +35,7 @@ public enum BuildType {
             this.order = order;
         }
 
-        public int order() {
+        int order() {
             return order;
         }
     }
@@ -59,15 +59,15 @@ public enum BuildType {
         return phase;
     }
 
-    public int minSpacing() {
+    int minSpacing() {
         return minSpacing;
     }
 
-    public int gridSize() {
+    int gridSize() {
         return gridSize;
     }
 
-    public int maxPerVillage() {
+    int maxPerVillage() {
         return maxPerVillage;
     }
 

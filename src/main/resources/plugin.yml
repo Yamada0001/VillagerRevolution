@@ -10,6 +10,9 @@ website: https://github.com/Yamada0001/VillagerRevolution/
 # 规范 0.1：Folia 区域化多线程支持声明
 folia-supported: true
 
+# CraftEngine 提供可选的自定义物品与资源包 API。
+softdepend: [CraftEngine]
+
 commands:
   bettervillagers:
     description: BetterVillagers 主命令

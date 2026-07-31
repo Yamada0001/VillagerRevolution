@@ -1,8 +1,9 @@
 package dev.bettervillagers.profession;
 
 import dev.bettervillagers.BV;
+import io.papermc.paper.registry.RegistryAccess;
+import io.papermc.paper.registry.RegistryKey;
 import org.bukkit.NamespacedKey;
-import org.bukkit.Registry;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.LivingEntity;
@@ -52,19 +53,21 @@ public final class EquipmentApplier {
         // 战斗属性数值层（规范 0.2：Paper 26.2 属性 key 不带 generic. 前缀）
         double healthMult = broken ? 0.5 : 1.0;
         double attackMult = broken ? 0.5 : 1.0;
+        double defenseMult = broken ? 0.5 : 1.0;
         setAttribute(entity, "max_health", data.stats().health() * healthMult);
         setAttribute(entity, "attack_damage", data.stats().attack() * attackMult);
+        setAttribute(entity, "armor", data.stats().defense().damageReduction() * 20.0 * defenseMult);
         try {
-            entity.setHealth(Math.min(data.stats().health(), entity.getMaxHealth()));
+            entity.setHealth(Math.min(data.stats().health(), maxHealth(entity, data.stats().health())));
         } catch (Exception ignored) {
             // 容错：设血量失败不影响流程
         }
     }
 
-    /** 通过 Registry 获取属性（避免使用 @Deprecated 的 Attribute 静态常量，规范 0.2）。 */
+    /** 通过 registry key 获取属性，避免依赖旧式静态解析。 */
     private static void setAttribute(LivingEntity entity, String key, double value) {
         try {
-            Attribute attr = Registry.ATTRIBUTE.get(NamespacedKey.minecraft(key));
+            Attribute attr = attribute(key);
             if (attr == null) {
                 return;
             }
@@ -75,5 +78,20 @@ public final class EquipmentApplier {
         } catch (Throwable t) {
             BV.plugin().getLogger().warning(BV.messages().raw("log.attr-set-fail").replace("{key}", key).replace("{error}", t.getMessage()));
         }
+    }
+
+    private static double maxHealth(LivingEntity entity, double fallback) {
+        Attribute attr = attribute("max_health");
+        if (attr == null) {
+            return fallback;
+        }
+        AttributeInstance maxHealth = entity.getAttribute(attr);
+        return maxHealth == null ? fallback : maxHealth.getValue();
+    }
+
+    private static Attribute attribute(String key) {
+        return RegistryAccess.registryAccess()
+                .getRegistry(RegistryKey.ATTRIBUTE)
+                .get(NamespacedKey.minecraft(key));
     }
 }

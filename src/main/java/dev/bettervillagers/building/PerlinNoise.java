@@ -9,12 +9,16 @@ package dev.bettervillagers.building;
  * <p>
  * 参考：Ken Perlin, "Improving Noise", SIGGRAPH 2002.
  */
-public final class PerlinNoise {
+final class PerlinNoise {
+
+    private static final int FBM_OCTAVES = 4;
+    private static final double FBM_PERSISTENCE = 0.5;
+    private static final double FBM_LACUNARITY = 2.0;
 
     /** 标准置换表种子（经典实现固定表 + 种子打乱）。 */
     private final int[] p = new int[512];
 
-    public PerlinNoise(long seed) {
+    PerlinNoise(long seed) {
         int[] source = new int[256];
         for (int i = 0; i < 256; i++) {
             source[i] = i;
@@ -24,9 +28,6 @@ public final class PerlinNoise {
         for (int i = 255; i > 0; i--) {
             s = (s * 6364136223846793005L + 1442695040888963407L);
             int j = (int) ((s >>> 33) % (i + 1));
-            if (j < 0) {
-                j += i + 1;
-            }
             int tmp = source[i];
             source[i] = source[j];
             source[j] = tmp;
@@ -38,7 +39,7 @@ public final class PerlinNoise {
     }
 
     /** 三维柏林噪声，返回约 [-1, 1]。 */
-    public double noise(double x, double y, double z) {
+    private double noise(double x, double y, double z) {
         int X = floor(x) & 255;
         int Y = floor(y) & 255;
         int Z = floor(z) & 255;
@@ -67,16 +68,16 @@ public final class PerlinNoise {
      * 分形布朗运动（fBm）：多层八度叠加，工程上用于粗糙度/起伏量化。
      * 不改变世界生成，仅作场地复杂度评估。
      */
-    public double fbm(double x, double y, double z, int octaves, double persistence, double lacunarity) {
+    double fbm(double x, double y, double z) {
         double total = 0;
         double amplitude = 1;
         double frequency = 1;
         double maxValue = 0;
-        for (int i = 0; i < octaves; i++) {
+        for (int i = 0; i < FBM_OCTAVES; i++) {
             total += noise(x * frequency, y * frequency, z * frequency) * amplitude;
             maxValue += amplitude;
-            amplitude *= persistence;
-            frequency *= lacunarity;
+            amplitude *= FBM_PERSISTENCE;
+            frequency *= FBM_LACUNARITY;
         }
         return maxValue == 0 ? 0 : total / maxValue;
     }
@@ -98,8 +99,8 @@ public final class PerlinNoise {
         return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
     }
 
-    private static int floor(double x) {
-        int xi = (int) x;
-        return x < xi ? xi - 1 : xi;
+    private static int floor(double value) {
+        int integer = (int) value;
+        return value < integer ? integer - 1 : integer;
     }
 }

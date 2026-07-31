@@ -11,6 +11,9 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.Container;
+import org.bukkit.block.Sign;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.LivingEntity;
 
 import java.util.ArrayList;
@@ -23,16 +26,15 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>
  * 每 tick 批量处理少量步骤；可在阶段切换时再次调用 AI 决定是否继续/HOLD。
  */
-public final class ConstructionJob {
+final class ConstructionJob {
 
     private static final int STEPS_PER_TICK = 2;
-    private static final double WORKER_RANGE_SQ = 64.0 * 64.0;
     /** 单个工地最大工人数（原硬编码 8，规范：魔法值提取为常量）。 */
-    static final int MAX_WORKERS = 8;
+    private static final int MAX_WORKERS = 8;
     /** 工人到达判定距离平方（3 格）。 */
     private static final double ARRIVE_DIST_SQ = 9.0;
     /** 工人引导移动速度（与 ReflexEngine 战斗速度统一）。 */
-    static final double WORK_SPEED = 0.4;
+    private static final double WORK_SPEED = 0.4;
 
     private final int villageId;
     private final String type;
@@ -51,9 +53,9 @@ public final class ConstructionJob {
     private volatile BuildType buildType;
     private volatile BuildCache boundCache;
 
-    public ConstructionJob(int villageId, String type, String worldName,
-                           int centerX, int centerY, int centerZ,
-                           List<ConstructionStep> steps, String displayName) {
+    ConstructionJob(int villageId, String type, String worldName,
+                    int centerX, int centerY, int centerZ,
+                    List<ConstructionStep> steps, String displayName) {
         this.villageId = villageId;
         this.type = type;
         this.worldName = worldName;
@@ -72,39 +74,31 @@ public final class ConstructionJob {
     /**
      * 绑定建筑缓存：取消时释放占位，完工保留防重复堆叠。
      */
-    public void bindCache(BuildCache cache, BuildType buildType) {
+    void bindCache(BuildCache cache, BuildType buildType) {
         this.boundCache = cache;
         if (buildType != null) {
             this.buildType = buildType;
         }
     }
 
-    public BuildType buildType() {
+    BuildType buildType() {
         return buildType;
     }
 
-    public int villageId() {
+    int villageId() {
         return villageId;
     }
 
-    public boolean finished() {
-        return finished;
+    boolean active() {
+        return !finished;
     }
 
-    public Location centerLocation() {
-        World w = Bukkit.getWorld(worldName);
-        if (w == null) {
-            return null;
-        }
-        return new Location(w, centerX + 0.5, centerY, centerZ + 0.5);
-    }
-
-    public String teleportData() {
+    String teleportData() {
         return centerX + "," + centerY + "," + centerZ + "," + worldName;
     }
 
     /** 指派非战斗村民为施工队。 */
-    public void assignWorkers() {
+    private void assignWorkers() {
         workerUuids.clear();
         if (BV.villagers() == null) {
             return;
@@ -116,7 +110,7 @@ public final class ConstructionJob {
             if (bv.villageId() != villageId && !inVillageRange(bv)) {
                 continue;
             }
-            if (!bv.isAlive()) {
+            if (!bv.isAlive() || bv.state() == VillagerState.SOCIALIZING) {
                 continue;
             }
             workerUuids.add(bv.uuid());
@@ -151,7 +145,7 @@ public final class ConstructionJob {
         return v.covers(loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
     }
 
-    public static boolean isNonCombatWorker(Profession p) {
+    private static boolean isNonCombatWorker(Profession p) {
         return p == Profession.BUILDER
                 || p == Profession.CIVILIAN
                 || p == Profession.FARMER
@@ -162,14 +156,14 @@ public final class ConstructionJob {
     }
 
     /** 启动全局定时施工循环（异步调度入口，写操作回区域线程）。 */
-    public void start() {
+    void start() {
         assignWorkers();
         BV.messages().broadcastClickable("building-started", teleportData(),
                 "structure", displayName);
         handle = BV.scheduler().runGlobalTimer(this::tick, 10L, 4L);
     }
 
-    public void cancel() {
+    void cancel() {
         if (finished) {
             return;
         }
@@ -188,7 +182,7 @@ public final class ConstructionJob {
         if (boundCache == null || buildType == null) {
             return;
         }
-        boundCache.releaseOnCancel(villageId, buildType, worldName, centerX, centerY, centerZ);
+        boundCache.releaseOnCancel(villageId, buildType, worldName, centerX, centerZ);
     }
 
     private void tick() {
@@ -270,6 +264,7 @@ public final class ConstructionJob {
     }
 
     private void applyStep(Location loc, ConstructionStep step) {
+        BV.guard().assertRegionThread(loc);
         Block block = loc.getBlock();
         Material existing = block.getType();
         // 保护重要容器/工作站；硬结构仅允许 SITE_PREP 清理软障碍
@@ -292,7 +287,7 @@ public final class ConstructionJob {
             }
             return;
         }
-        if (existing == step.material()) {
+        if (existing == step.material() && step.blockData() == null) {
             return;
         }
         // 勿穿模既有石砖/原木结构（碰撞）
@@ -308,7 +303,36 @@ public final class ConstructionJob {
             return;
         }
         // applyPhysics=false：尤其防止放置 WATER/FARMLAND 等触发物理/流体级联（规范 5.2）
+        if (step.blockData() != null) {
+            try {
+                BlockData data = Bukkit.createBlockData(step.blockData());
+                block.setBlockData(data, false);
+                applyBlockEntityPolicy(block, step.blockEntityPolicy());
+                return;
+            } catch (IllegalArgumentException ignored) {
+                // 模板包含当前服务端不支持的状态时，降级为材质放置。
+            }
+        }
         block.setType(step.material(), false);
+        applyBlockEntityPolicy(block, step.blockEntityPolicy());
+    }
+
+    private static void applyBlockEntityPolicy(Block block, BlockEntityPolicy policy) {
+        if (policy == null || policy == BlockEntityPolicy.NONE) {
+            return;
+        }
+        if (policy == BlockEntityPolicy.CLEAR_INVENTORY && block.getState() instanceof Container container) {
+            container.getInventory().clear();
+            container.update(true, false);
+        } else if (policy == BlockEntityPolicy.CLEAR_SIGN && block.getState() instanceof Sign sign) {
+            for (org.bukkit.block.sign.Side side : org.bukkit.block.sign.Side.values()) {
+                sign.getSide(side).line(0, net.kyori.adventure.text.Component.empty());
+                sign.getSide(side).line(1, net.kyori.adventure.text.Component.empty());
+                sign.getSide(side).line(2, net.kyori.adventure.text.Component.empty());
+                sign.getSide(side).line(3, net.kyori.adventure.text.Component.empty());
+            }
+            sign.update(true, false);
+        }
     }
 
     private void guideNearestWorker(Location target) {
@@ -324,7 +348,7 @@ public final class ConstructionJob {
             }
             BVillager bv = opt.get();
             LivingEntity e = bv.entity();
-            if (e == null || e.isDead()) {
+            if (e == null || e.isDead() || bv.state() == VillagerState.SOCIALIZING) {
                 continue;
             }
             // 跨世界 distanceSquared 会抛 IllegalArgumentException，先校验世界一致（规范 5.x）
@@ -343,7 +367,7 @@ public final class ConstructionJob {
         BVillager worker = best;
         BV.scheduler().runForEntity(worker.entity(), () -> {
             LivingEntity e = worker.entity();
-            if (e == null) {
+            if (e == null || worker.state() == VillagerState.SOCIALIZING) {
                 return;
             }
             if (e.getWorld().equals(target.getWorld())

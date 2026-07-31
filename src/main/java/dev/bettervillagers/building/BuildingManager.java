@@ -1,6 +1,7 @@
 package dev.bettervillagers.building;
 
 import dev.bettervillagers.BV;
+import dev.bettervillagers.storage.BuildLayoutRecord;
 import org.bukkit.Location;
 
 import java.util.List;
@@ -9,35 +10,48 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 组织化建造管理器：缓存防堆叠 + 四阶段异步施工。
- * <p>
- * 流程：国王命令 → 建筑师 AI（可选）→ 异步场地评估（柏林分析）→ BuildCache 占位 → ConstructionJob。
- * 不修改原版世界柏林生成；写方块仅在区域线程分批执行。
+ * Coordinates terrain assessment, blueprint planning, build jobs, and persisted layouts.
  */
 public final class BuildingManager {
 
     private final BuildCache cache = new BuildCache();
-    /** 场地评估半径（格）：线型/街景类较窄，围合类较宽（原硬编码，规范：魔法值提取为常量）。 */
-    private static final int ASSESS_RADIUS_NARROW = 6;
-    private static final int ASSESS_RADIUS_WIDE = 8;
     private final List<ConstructionJob> activeJobs = new CopyOnWriteArrayList<>();
     private final TerrainAnalyzer analyzer = new TerrainAnalyzer();
-    private final Map<Integer, BuildQuota> quotas = new ConcurrentHashMap<>();
+    private final StructureTemplateLibrary templates = new StructureTemplateLibrary();
+    private final RoadLayout roads = new RoadLayout();
+    private final Map<ConstructionJob, BuildLayoutRecord> plannedLayouts = new ConcurrentHashMap<>();
+    private final Map<ConstructionJob, PendingRoad> pendingRoads = new ConcurrentHashMap<>();
 
-    private record BuildQuota(long period, int accepted) {
+    public BuildingManager() {
+        templates.installDefaults();
+    }
+
+    public Location nextRoadSite(int villageId, Location center) {
+        return roads.nextSite(villageId, center, cache, templates);
+    }
+
+    public void restoreLayouts() {
+        BV.scheduler().runAsync(() -> {
+            for (BuildLayoutRecord record : BV.storage().buildLayouts().findAll()) {
+                cache.restore(record);
+            }
+            roads.restore(BV.storage().roadPorts().findAll());
+        });
+    }
+
+    public void clearVillage(int villageId) {
+        cache.clear(villageId);
+        roads.clear(villageId);
+        BV.scheduler().runAsync(() -> {
+            BV.storage().buildLayouts().deleteVillage(villageId);
+            BV.storage().roadPorts().deleteVillage(villageId);
+        });
     }
 
     public BuildCache cache() {
         return cache;
     }
 
-    /**
-     * 下发建造任务（异步）。
-     *
-     * @param typeName  类型名或命令词
-     * @param villageId 村庄
-     * @param center    偏好中心（会经缓存偏移）
-     */
     public void issueTask(String typeName, int villageId, Location center) {
         if (center == null || center.getWorld() == null) {
             return;
@@ -46,7 +60,6 @@ public final class BuildingManager {
         if (type == null) {
             return;
         }
-        // 集体活动：仅广播
         if (!type.physical()) {
             String displayName = display(type);
             BV.messages().broadcast("building-started", "structure", displayName);
@@ -54,9 +67,6 @@ public final class BuildingManager {
                     BV.messages().broadcast("building-completed", "structure", displayName), 100L);
             return;
         }
-
-        // 同类型上限 / 阶段外任务仍可发，但缓存满则拒绝
-        // 建造位置需满足 Y 轴门槛，并仅在村庄接收范围内处理命令
         if (cache.count(villageId, type) >= type.maxPerVillage()) {
             BV.plugin().getLogger().info(
                     BV.messages().raw("log.building-cache-full")
@@ -65,93 +75,106 @@ public final class BuildingManager {
             return;
         }
 
-        // 合法空位：找不到则禁止开工（修复回退原点堆叠）
-        Location free = cache.findFreeLocation(villageId, type, center);
-        if (free == null) {
-            BV.plugin().getLogger().info(
-                    BV.messages().raw("log.building-no-slot")
-                            .replace("{type}", type.name())
-                            .replace("{village}", String.valueOf(villageId)));
+        Location candidate = type == BuildType.ROAD ? center.clone() : cache.findFreeLocation(villageId, type, center);
+        if (candidate == null) {
+            BV.plugin().getLogger().info(BV.messages().raw("log.building-no-slot")
+                    .replace("{type}", type.name())
+                    .replace("{village}", String.valueOf(villageId)));
             return;
         }
 
-        int radius = type == BuildType.ROAD || type == BuildType.STREETSCAPE ? ASSESS_RADIUS_NARROW : ASSESS_RADIUS_WIDE;
-        Location candidate = free.clone();
+        RoadLayout.Reservation reservation = type == BuildType.ROAD ? roads.takeReservation(villageId, candidate) : null;
+        StructureTemplate initialTemplate = reservation == null ? null : reservation.template();
+        StructureTemplate.Placement initialPlacement = reservation == null ? null : reservation.placement();
+        int radius = reservation == null ? templates.assessmentRadius(type)
+                : Math.max(initialTemplate.transformedWidth(initialPlacement),
+                        initialTemplate.transformedDepth(initialPlacement)) / 2 + 1;
 
         analyzer.assessAsync(candidate, radius).thenAccept(assessment -> {
-            if (assessment == null) {
+            if (assessment == null || !assessment.suitable()) {
+                roads.rollback(villageId, reservation);
                 logUnsuitable(type.name());
                 return;
             }
-            // 命令坐标低于实际表层时拒绝，避免建筑计划落在地下
-            if (candidate.getBlockY() < assessment.centerY()) {
-                rollbackQuota(villageId, candidate.getWorld());
-                BV.plugin().getLogger().info(BV.messages().raw("log.building-y-too-low")
-                        .replace("{village}", String.valueOf(villageId))
-                        .replace("{command-y}", String.valueOf(candidate.getBlockY()))
-                        .replace("{surface-y}", String.valueOf(assessment.centerY())));
-                return;
-            }
-            // 严格场地校验：熔岩/水域/悬崖/碰撞过密直接拒绝
-            if (!assessment.suitable()) {
-                logUnsuitable(type.name());
-                return;
-            }
-            consultBuilderAi(type, assessment).thenAccept(approved -> {
-                if (approved == null) {
-                    return;
-                }
-                if (approved == BuildType.DESTROY && type != BuildType.DESTROY) {
-                    // 建筑师不应把常规建设改成拆除
-                    approved = type;
-                }
-                // 占位必须在真正开工前；失败则整单取消
-                boolean occupied = cache.tryOccupy(
-                        villageId, approved,
-                        candidate.getWorld().getName(),
-                        assessment.centerX(), assessment.targetLevelY(), assessment.centerZ());
-                if (!occupied) {
-                    BV.plugin().getLogger().info(
-                            BV.messages().raw("log.building-cache-race")
-                                    .replace("{type}", approved.name()));
-                    return;
-                }
-                List<ConstructionStep> steps = BlueprintPlanner.plan(approved, assessment);
-                if (steps.isEmpty()) {
-                    cache.releaseOnCancel(villageId, approved, candidate.getWorld().getName(),
-                            assessment.centerX(), assessment.targetLevelY(), assessment.centerZ());
-                    rollbackQuota(villageId, candidate.getWorld());
-                    return;
-                }
-                String displayName = display(approved);
-                ConstructionJob job = new ConstructionJob(
-                        villageId, approved.name(), candidate.getWorld().getName(),
-                        assessment.centerX(), assessment.targetLevelY(), assessment.centerZ(),
-                        steps, displayName);
-                job.bindCache(cache, approved);
-                activeJobs.add(job);
-                job.start();
-            });
-        }).exceptionally(ex -> {
-            BV.plugin().getLogger().warning(
-                    BV.messages().raw("log.building-terrain-unsuitable")
-                            .replace("{type}", type.name()) + " err=" + ex.getMessage());
-            return null;
+            consultBuilderAi(type, assessment).thenAccept(approved ->
+                    startApprovedBuild(villageId, candidate, reservation, assessment, type, approved));
         });
     }
 
-    private void rollbackQuota(int villageId, org.bukkit.World world) {
-        // 规范：异步线程禁止访问世界 API（原 world.getFullTime()）。
-        // 配额周期改用真实时间（毫秒），语义等价且不触碰游戏世界；
-        // 注：当前配额仅在此处递减，无授予入口，故周期来源变更不影响既有行为。
-        long period = System.currentTimeMillis()
-                / (24L * 60 * 60 * 1000L * Math.max(1, BV.config().buildTaskPeriodDays()));
-        synchronized (quotas) {
-            BuildQuota current = quotas.get(villageId);
-            if (current != null && current.period() == period && current.accepted() > 0) {
-                quotas.put(villageId, new BuildQuota(period, current.accepted() - 1));
+    private void startApprovedBuild(int villageId, Location candidate, RoadLayout.Reservation reservation,
+                                    SiteAssessment assessment, BuildType requested, BuildType approved) {
+        if (approved == null || approved == BuildType.DESTROY && requested != BuildType.DESTROY) {
+            roads.rollback(villageId, reservation);
+            return;
+        }
+        StructureTemplate template = reservation == null
+                ? templates.choose(approved, assessment.biomeKey(), assessment.seed(),
+                        assessment.centerX(), assessment.centerZ()).orElse(null)
+                : reservation.template();
+        StructureTemplate.Placement placement = reservation == null
+                ? (template == null ? null : StructureTemplate.Placement.centered(template))
+                : reservation.placement();
+
+        int width = template == null ? defaultHalfSize(approved) * 2 + 1 : template.transformedWidth(placement);
+        int depth = template == null ? defaultHalfSize(approved) * 2 + 1 : template.transformedDepth(placement);
+        int minX = assessment.centerX() - (placement == null ? width / 2 : placement.anchorX());
+        int minZ = assessment.centerZ() - (placement == null ? depth / 2 : placement.anchorZ());
+        int maxX = minX + width - 1;
+        int maxZ = minZ + depth - 1;
+        String clusterId = "";
+        String templateId = template == null ? "" : template.id();
+        List<ConstructionStep> steps = BlueprintPlanner.plan(approved, assessment, template, placement);
+
+        if (approved == BuildType.LANDSCAPE) {
+            int population = BV.villages().get(villageId)
+                    .map(dev.bettervillagers.village.Village::population)
+                    .orElse(0);
+            StructureCluster cluster = templates.chooseCluster(assessment.biomeKey(), assessment.seed(), villageId,
+                    population, cache.completedClusters(villageId)).orElse(null);
+            StructureClusterPlanner.Plan clusterPlan = cluster == null ? null
+                    : StructureClusterPlanner.plan(cluster, templates, assessment.centerX(),
+                            assessment.targetLevelY(), assessment.centerZ());
+            if (clusterPlan != null) {
+                clusterId = clusterPlan.clusterId();
+                templateId = cluster.rootTemplate();
+                steps = clusterPlan.steps();
+                minX = clusterPlan.minX();
+                maxX = clusterPlan.maxX();
+                minZ = clusterPlan.minZ();
+                maxZ = clusterPlan.maxZ();
             }
         }
+
+        if (!cache.tryOccupy(villageId, approved, candidate.getWorld().getName(),
+                assessment.centerX(), assessment.centerZ(), minX, maxX, minZ, maxZ)) {
+            roads.rollback(villageId, reservation);
+            return;
+        }
+        if (steps.isEmpty()) {
+            cache.releaseOnCancel(villageId, approved, candidate.getWorld().getName(),
+                    assessment.centerX(), assessment.centerZ());
+            roads.rollback(villageId, reservation);
+            return;
+        }
+
+        ConstructionJob job = new ConstructionJob(villageId, approved.name(), candidate.getWorld().getName(),
+                assessment.centerX(), assessment.targetLevelY(), assessment.centerZ(), steps, display(approved));
+        job.bindCache(cache, approved);
+        activeJobs.add(job);
+        plannedLayouts.put(job, new BuildLayoutRecord(villageId, candidate.getWorld().getName(), approved.name(),
+                templateId, assessment.centerX(), assessment.targetLevelY(), assessment.centerZ(),
+                minX, maxX, minZ, maxZ,
+                placement == null ? StructureTemplate.Rotation.NONE.name() : placement.rotation().name(),
+                placement == null ? StructureTemplate.Mirror.NONE.name() : placement.mirror().name(),
+                clusterId));
+        if (reservation != null) {
+            pendingRoads.put(job, new PendingRoad(candidate.clone(), reservation));
+        }
+        job.start();
+    }
+
+    private static int defaultHalfSize(BuildType type) {
+        return Math.max(3, type.minSpacing() / 2 + 2);
     }
 
     private void logUnsuitable(String type) {
@@ -159,96 +182,111 @@ public final class BuildingManager {
                 BV.messages().raw("log.building-terrain-unsuitable").replace("{type}", type));
     }
 
-    private String display(BuildType t) {
-        String key = "structure." + t.structureKey();
+    private String display(BuildType type) {
+        String key = "structure." + type.structureKey();
         String raw = BV.messages().raw(key);
-        return raw.equals(key) ? t.name() : raw;
+        return raw.equals(key) ? type.name() : raw;
     }
 
-    private java.util.concurrent.CompletableFuture<BuildType> consultBuilderAi(BuildType type, SiteAssessment a) {
+    private java.util.concurrent.CompletableFuture<BuildType> consultBuilderAi(BuildType type, SiteAssessment assessment) {
         String system = BV.messages().raw("ai-prompt.builder-system");
         String user = BV.messages().raw("ai-prompt.builder-user")
-                .replace("{loc}", a.centerX() + "," + a.targetLevelY() + "," + a.centerZ())
-                .replace("{terrain}", a.summary())
-                .replace("{complexity}", String.format("%.2f", a.complexity()))
-                .replace("{ease}", String.format("%.2f", a.modificationEase()))
+                .replace("{loc}", assessment.centerX() + "," + assessment.targetLevelY() + "," + assessment.centerZ())
+                .replace("{terrain}", assessment.summary())
+                .replace("{complexity}", String.format("%.2f", assessment.complexity()))
+                .replace("{ease}", String.format("%.2f", assessment.modificationEase()))
                 .replace("{command}", type.name());
         var ctx = new dev.bettervillagers.ai.AIContext(
-                "builder-plan-" + a.centerX() + "-" + a.centerZ(),
+                "builder-plan-" + assessment.centerX() + "-" + assessment.centerZ(),
                 "builder", "builder", "build", system, user);
-        return BV.ai().decide(ctx).thenApply(r -> {
-            if (r == null || !r.isUsable()) {
+        return BV.ai().decide(ctx).thenApply(response -> {
+            if (response == null || !response.isUsable()) {
                 return type;
             }
-            String upper = r.text().toUpperCase();
+            String upper = response.text().toUpperCase();
             if (upper.contains("HOLD")) {
                 return null;
             }
             BuildType parsed = BuildType.fromCommand(upper);
-            // 建筑师只能微调同阶段类型，防止跳过「先修路」
             if (parsed != null && parsed.phase().order() == type.phase().order()) {
                 return parsed;
             }
             return type;
-        }).exceptionally(ex -> type);
+        }).exceptionally(ex -> handleBuilderAiFailure(type, ex));
     }
 
-    public void onJobCompleted(ConstructionJob job) {
+    private BuildType handleBuilderAiFailure(BuildType fallback, Throwable ex) {
+        if (BV.config().debugMode() && ex != null) {
+            BV.plugin().getLogger().warning("Builder AI failed: " + ex.getMessage());
+        }
+        return fallback;
+    }
+
+    void onJobCompleted(ConstructionJob job) {
         activeJobs.remove(job);
-        if (job.buildType() != null) {
-            cache.markCompleted(job.villageId(), job.buildType());
+        PendingRoad pendingRoad = pendingRoads.remove(job);
+        if (pendingRoad != null) {
+            roads.commit(job.villageId(), pendingRoad.site(), pendingRoad.reservation());
+        }
+        BuildLayoutRecord record = plannedLayouts.remove(job);
+        if (record != null) {
+            cache.rememberCompleted(record);
+            persistVillage(record.villageId());
         }
     }
 
-    public void onJobCancelled(ConstructionJob job) {
+    void onJobCancelled(ConstructionJob job) {
         activeJobs.remove(job);
+        PendingRoad pendingRoad = pendingRoads.remove(job);
+        if (pendingRoad != null) {
+            roads.rollback(job.villageId(), pendingRoad.reservation());
+        }
+        plannedLayouts.remove(job);
     }
 
-    /**
-     * 插件禁用时取消所有进行中的施工任务（规范 4.x：调度器/任务生命周期管理）。
-     * <p>须在 {@link BV#shutdown()} 之前调用，避免 tick 回调中访问已置 null 的全局服务而 NPE。
-     */
+    private void persistVillage(int villageId) {
+        List<BuildLayoutRecord> layouts = cache.exportVillage(villageId);
+        var ports = roads.exportVillage(villageId);
+        BV.scheduler().runAsync(() -> {
+            BV.storage().buildLayouts().replaceVillage(villageId, layouts);
+            BV.storage().roadPorts().replaceVillage(villageId, ports);
+        });
+    }
+
     public void shutdown() {
         for (ConstructionJob job : activeJobs) {
             try {
                 job.cancel();
             } catch (Throwable ignored) {
-                // 关闭阶段尽力取消，忽略单个任务异常
             }
         }
         activeJobs.clear();
     }
 
     public boolean isVillageBuilding(int villageId) {
-        for (ConstructionJob j : activeJobs) {
-            if (j.villageId() == villageId && !j.finished()) {
+        for (ConstructionJob job : activeJobs) {
+            if (job.villageId() == villageId && job.active()) {
                 return true;
             }
         }
         return false;
     }
 
-    /** 同阶段并行上限（贴合真实工程节奏：同阶段可并行，跨阶段串行）。 */
     public int activeJobsInPhase(int villageId, BuildType.DevPhase phase) {
-        int n = 0;
-        for (ConstructionJob j : activeJobs) {
-            if (j.villageId() == villageId && !j.finished()
-                    && j.buildType() != null && j.buildType().phase() == phase) {
-                n++;
+        int count = 0;
+        for (ConstructionJob job : activeJobs) {
+            if (job.villageId() == villageId && job.active()
+                    && job.buildType() != null && job.buildType().phase() == phase) {
+                count++;
             }
         }
-        return n;
+        return count;
     }
 
-    public int activeJobCount() {
-        return (int) activeJobs.stream().filter(j -> !j.finished()).count();
-    }
-
-    /** 当前村庄应执行的发展阶段（要想富先修路）。 */
     public BuildType.DevPhase currentPhase(int villageId, int population) {
-        int roadNeed = Math.max(3, Math.min(8, 2 + population / 6));
-        int streetNeed = Math.max(2, Math.min(6, 1 + population / 8));
-        int houseNeed = Math.max(2, Math.min(10, 1 + population / 5));
+        int roadNeed = Math.clamp(2 + population / 6, 3, 8);
+        int streetNeed = Math.clamp(1 + population / 8, 2, 6);
+        int houseNeed = Math.clamp(1 + population / 5, 2, 10);
         if (!cache.roadsComplete(villageId, roadNeed)) {
             return BuildType.DevPhase.ROADS;
         }
@@ -261,7 +299,6 @@ public final class BuildingManager {
         return BuildType.DevPhase.DEFENSE_LANDSCAPE;
     }
 
-    /** 阶段内推荐建造类型（可并行多种同阶段任务）。 */
     public BuildType recommendType(int villageId, int population) {
         BuildType.DevPhase phase = currentPhase(villageId, population);
         return switch (phase) {
@@ -271,22 +308,29 @@ public final class BuildingManager {
                 int houses = cache.count(villageId, BuildType.HOUSE);
                 int upgrades = cache.count(villageId, BuildType.UPGRADE_HOUSE);
                 int farms = cache.count(villageId, BuildType.FARM);
+                int fairs = cache.count(villageId, BuildType.TRADE_FAIR);
                 if (houses > 0 && upgrades < houses) {
                     yield BuildType.UPGRADE_HOUSE;
                 }
                 if (farms < Math.max(1, population / 8)) {
                     yield BuildType.FARM;
                 }
+                if (population >= 8 && fairs < Math.max(1, population / 16)) {
+                    yield BuildType.TRADE_FAIR;
+                }
                 yield BuildType.HOUSE;
             }
             case DEFENSE_LANDSCAPE -> {
                 int walls = cache.count(villageId, BuildType.WALL);
                 int lands = cache.count(villageId, BuildType.LANDSCAPE);
-                if (lands < Math.max(1, walls)) {
+                if (lands < Math.max(2, walls + 1)) {
                     yield BuildType.LANDSCAPE;
                 }
                 yield BuildType.WALL;
             }
         };
+    }
+
+    private record PendingRoad(Location site, RoadLayout.Reservation reservation) {
     }
 }

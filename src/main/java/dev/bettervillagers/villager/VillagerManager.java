@@ -62,7 +62,7 @@ public final class VillagerManager {
         // biome 在主线程预先取好（findOrCreate 异步线程使用）
         String biomeRaw = "plains";
         try {
-            biomeRaw = spawnLoc.getBlock().getBiome().name().toLowerCase().replace('_', ' ');
+            biomeRaw = spawnLoc.getBlock().getBiome().getKey().getKey().toLowerCase().replace('_', ' ');
         } catch (Throwable ignored) {
             // 某些平台/世界类型可能无法获取生物群系
         }
@@ -86,7 +86,7 @@ public final class VillagerManager {
                 int villageId = BV.villages().findOrCreate(worldName, blockX, blockY, blockZ, biome);
                 boolean kingPresent = BV.villages().hasKing(villageId);
                 int population = BV.villages().get(villageId)
-                        .map(v -> v.population()).orElse(0);
+                        .map(dev.bettervillagers.village.Village::population).orElse(0);
                 prof = BV.professions().allocate(kingPresent, population, kingThreshold);
                 pd = BV.professions().data(prof);
                 long now = System.currentTimeMillis();
@@ -136,7 +136,7 @@ public final class VillagerManager {
                 if (BV.trade() != null && !pd.trades().isEmpty()) {
                     try {
                         // 已注册村民若 recipes 为空也补充（避免老村民/已加载村民无交易）
-                        if (isNewVillager || entity.getRecipes() == null || entity.getRecipes().isEmpty()) {
+                        if (isNewVillager || entity.getRecipes().isEmpty()) {
                             entity.setRecipes(BV.trade().generateOffers(bv));
                         }
                     } catch (Throwable t) {
@@ -448,28 +448,7 @@ public final class VillagerManager {
         return true;
     }
 
-    /** 非管理员转职（受冷却约束，规范 2.2：间隔 ≥ 1 游戏日）。 */
-    public boolean setProfessionNatural(String uuid, Profession prof, long nowTick) {
-        BVillager bv = online.get(uuid);
-        if (bv == null || bv.professionLocked()) {
-            return false;
-        }
-        if (!bv.canChangeNonAdmin(nowTick)) {
-            return false;
-        }
-        bv.lastProfessionChangeTick(nowTick);
-        ProfessionData pd = BV.professions().data(prof);
-        bv.profession(prof, pd, false);
-        Villager entity = bv.entity();
-        if (entity != null) {
-            BV.scheduler().runForEntity(entity, () -> {
-                EquipmentApplier.apply(entity, pd);
-                updateDisplayName(bv);
-            }, null);
-        }
-        return true;
-    }
-
+    /* 非管理员转职（受冷却约束，规范 2.2：间隔 ≥ 1 游戏日）。 */
     /** 定时保存全部（规范 4.5 WAL）。 */
     public void saveAll() {
         BV.scheduler().runAsync(() -> {
@@ -484,9 +463,9 @@ public final class VillagerManager {
                 } catch (RuntimeException e) {
                     BV.plugin().getLogger().severe(
                             BV.messages().raw("log.batch-save-fail").replace("{error}", e.getMessage()));
-                    for (VillagerData v : batch) {
+                    for (VillagerData villagerData : batch) {
                         dev.bettervillagers.storage.AtomicFileWriter.fallbackDump(
-                                BV.plugin(), v.uuid(), v.aiMemoryJson());
+                                BV.plugin(), villagerData.uuid(), villagerData.aiMemoryJson());
                     }
                 }
             }
@@ -510,13 +489,27 @@ public final class VillagerManager {
     }
 
     public void shutdown() {
-        if (tacticalHandle != null) tacticalHandle.cancel();
-        if (strategicHandle != null) strategicHandle.cancel();
-        if (saveHandle != null) saveHandle.cancel();
-        if (cleanupHandle != null) cleanupHandle.cancel();
-        if (combatHandle != null) combatHandle.cancel();
-        if (workHandle != null) workHandle.cancel();
-        if (socialHandle != null) socialHandle.cancel();
+        if (tacticalHandle != null) {
+            tacticalHandle.cancel();
+        }
+        if (strategicHandle != null) {
+            strategicHandle.cancel();
+        }
+        if (saveHandle != null) {
+            saveHandle.cancel();
+        }
+        if (cleanupHandle != null) {
+            cleanupHandle.cancel();
+        }
+        if (combatHandle != null) {
+            combatHandle.cancel();
+        }
+        if (workHandle != null) {
+            workHandle.cancel();
+        }
+        if (socialHandle != null) {
+            socialHandle.cancel();
+        }
         saveAllSync();
     }
 
@@ -532,15 +525,11 @@ public final class VillagerManager {
             } catch (RuntimeException e) {
                 BV.plugin().getLogger().severe(
                         BV.messages().raw("log.batch-save-fail").replace("{error}", e.getMessage()));
-                for (VillagerData v : batch) {
+                for (VillagerData villagerData : batch) {
                     dev.bettervillagers.storage.AtomicFileWriter.fallbackDump(
-                            BV.plugin(), v.uuid(), v.aiMemoryJson());
+                            BV.plugin(), villagerData.uuid(), villagerData.aiMemoryJson());
                 }
             }
         }
-    }
-
-    private String defaultName(Profession prof) {
-        return BV.messages().raw("professions." + prof.id());
     }
 }

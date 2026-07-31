@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class BVillager {
 
     /** 方块操作类型索引（规范 3.2：读取/破坏/放置/交互四类独立冷却）。 */
-    public static final int OP_READ = 0, OP_BREAK = 1, OP_PLACE = 2, OP_INTERACT = 3;
+    public static final int OP_BREAK = 0, OP_PLACE = 1, OP_INTERACT = 2;
 
     private final String uuid;
     // 多线程读写：异步 AI 回调/合并线程写入，主/区域线程读取，须 volatile 保证可见性
@@ -34,17 +34,15 @@ public final class BVillager {
     private final WeakReference<Villager> entityRef;
 
     // 规范 2.2：转职冷却（非管理员指派需间隔 ≥ 1 游戏日 = 24000 tick）
-    private volatile long lastProfessionChangeTick = Long.MIN_VALUE;
 
     // 规范 3.2：方块操作行动点数与四类独立冷却
     private volatile double actionPoints = 100.0;
     // 四类操作独立冷却时间戳（AtomicLong 保证跨线程读写的可见性与原子性）
     private final AtomicLong[] lastBlockOp = {
-            new AtomicLong(), new AtomicLong(), new AtomicLong(), new AtomicLong()
+            new AtomicLong(), new AtomicLong(), new AtomicLong()
     };
 
     // 规范 2.3：装备破损状态（耐久归零降级为破损，属性减半）
-    private volatile boolean equipmentBroken = false;
 
     // 巡逻锚点：基于 UUID 哈希计算的固定世界坐标，避免巡逻目标随移动漂移导致绕圈
     private volatile org.bukkit.Location patrolAnchor = null;
@@ -138,46 +136,19 @@ public final class BVillager {
 
     // ===== 规范 2.2：转职冷却 =====
 
-    public long lastProfessionChangeTick() {
-        return lastProfessionChangeTick;
-    }
-
-    public void lastProfessionChangeTick(long tick) {
-        this.lastProfessionChangeTick = tick;
-    }
-
-    /** 检查是否满足非管理员转职冷却（≥ 1 游戏日 = 24000 tick）。 */
-    public boolean canChangeNonAdmin(long nowTick) {
-        if (lastProfessionChangeTick == Long.MIN_VALUE) {
-            return true;
-        }
-        return nowTick - lastProfessionChangeTick >= 24000L;
-    }
-
+    /* 检查是否满足非管理员转职冷却（≥ 1 游戏日 = 24000 tick）。 */
     // ===== 规范 3.2：行动点数与方块操作冷却 =====
 
-    public double actionPoints() {
-        return actionPoints;
-    }
-
-    public void actionPoints(double points) {
-        this.actionPoints = points;
-    }
-
     /** 消耗行动点数，不足返回 false（synchronized 保证 check-then-act 原子性）。 */
-    public synchronized boolean consumeActionPoints(double cost) {
+    public synchronized boolean failedToConsumeActionPoints(double cost) {
         if (actionPoints < cost) {
-            return false;
+            return true;
         }
         actionPoints -= cost;
-        return true;
+        return false;
     }
 
     /** 回复行动点数（上限 100）。 */
-    public synchronized void restoreActionPoints(double amount) {
-        actionPoints = Math.min(100.0, actionPoints + amount);
-    }
-
     public long lastBlockOp(int opKind) {
         return lastBlockOp[opKind].get();
     }
@@ -187,14 +158,6 @@ public final class BVillager {
     }
 
     // ===== 规范 2.3：装备破损状态 =====
-
-    public boolean equipmentBroken() {
-        return equipmentBroken;
-    }
-
-    public void equipmentBroken(boolean broken) {
-        this.equipmentBroken = broken;
-    }
 
     // ===== 实体访问 =====
 
@@ -224,7 +187,7 @@ public final class BVillager {
                 return patrolAnchor;
             }
             Villager v = entityRef.get();
-            if (v == null || v.getWorld() == null) {
+            if (v == null) {
                 return null;
             }
             long hash = uuid.hashCode() & 0xFFFFFFFFL;

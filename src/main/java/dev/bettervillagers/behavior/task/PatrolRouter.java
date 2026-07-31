@@ -47,15 +47,15 @@ public final class PatrolRouter {
     }
 
     /** 重建指定村庄的巡逻路线（村庄数据变更时调用）。 */
-    public List<Location> rebuild(int villageId) {
+    public void rebuild(int villageId) {
         List<Location> built = buildRoute(villageId);
         if (built.isEmpty()) {
+            routes.remove(villageId);
             // D3 修复：空结果不写入缓存，保留旧有效路线或移除空占位
             routes.remove(villageId);
-            return List.of();
+            return;
         }
         routes.put(villageId, built);
-        return built;
     }
 
     /** D4 修复：村庄删除/卸载时移除其巡逻缓存，避免废弃 Location（含 World 强引用）堆积泄漏。 */

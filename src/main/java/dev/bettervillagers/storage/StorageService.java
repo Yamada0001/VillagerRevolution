@@ -14,15 +14,18 @@ public final class StorageService {
     private final VillagerRepository villagers;
     private final VillageRepository villages;
     private final RegionRepository regions;
-    private final boolean mysql;
+    private final BuildLayoutRepository buildLayouts;
+    private final RoadPortRepository roadPorts;
 
     public StorageService(Plugin plugin, ConfigurationSection storageCfg) {
-        this.mysql = "mysql".equalsIgnoreCase(storageCfg.getString("type", "sqlite"));
+        boolean mysql = "mysql".equalsIgnoreCase(storageCfg.getString("type", "sqlite"));
         this.dataSource = new DataSourceProvider(plugin, storageCfg);
         SchemaInitializer.init(dataSource::connection, mysql);
         this.villagers = new VillagerRepository(dataSource, mysql);
-        this.villages = new VillageRepository(dataSource, mysql);
+        this.villages = new VillageRepository(dataSource);
         this.regions = new RegionRepository(dataSource);
+        this.buildLayouts = new BuildLayoutRepository(dataSource);
+        this.roadPorts = new RoadPortRepository(dataSource);
     }
 
     public VillagerRepository villagers() {
@@ -37,9 +40,9 @@ public final class StorageService {
         return regions;
     }
 
-    public boolean isMysql() {
-        return mysql;
-    }
+    public BuildLayoutRepository buildLayouts() { return buildLayouts; }
+
+    public RoadPortRepository roadPorts() { return roadPorts; }
 
     public void close() {
         dataSource.close();

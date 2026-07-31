@@ -3,7 +3,7 @@
 # 对应开发规范第六章 / 各功能模块配置项
 # ver: 配置版本号（勿手动修改，由 Ver.java 控制）
 # ============================================================
-ver: 3
+ver: 5
 plugin:
   language: "zh_CN"
   debug-mode: false
@@ -84,6 +84,23 @@ features:
   auto-trading: true
   profession-tasks: true    # 各职业核心职责行为（农民种地/军事巡逻/矿工挖矿等，规范 3.3）
   social-interaction: true  # 跨职业村民相遇驻足攀谈社交（规范 3.3）
+
+# ---------- 村民社交与头顶气泡 ----------
+social:
+  encounter-range: 3.5
+  encounter-height: 2.0
+  chat-duration-seconds: 5
+  chat-cooldown-seconds: 30
+  chat-max-length: 32
+  trade-chance: 0.35
+  bubble:
+    enabled: true
+    height: 0.6
+    reply-interval-ticks: 40
+    chat-duration-ticks: 100
+    chat-bubble-duration-ticks: 35
+    trade-duration-ticks: 60
+    item-spacing: 0.35
 
 # ---------- 生电模式（规范 5.x） ----------
 redstone-mode:

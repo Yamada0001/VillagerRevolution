@@ -6,11 +6,13 @@ import dev.bettervillagers.building.BuildingManager;
 import dev.bettervillagers.command.BVCommand;
 import dev.bettervillagers.config.ConfigManager;
 import dev.bettervillagers.debug.DebugMonitor;
+import dev.bettervillagers.gui.BetterVillagersGui;
 import dev.bettervillagers.i18n.MessageService;
 import dev.bettervillagers.listener.VillagerListener;
 import dev.bettervillagers.listener.VillageEntryListener;
 import dev.bettervillagers.profession.ProfessionManager;
 import dev.bettervillagers.redstone.RegionManager;
+import dev.bettervillagers.redstone.RegionSelectionListener;
 import dev.bettervillagers.scheduler.FoliaLibSchedulerAdapter;
 import dev.bettervillagers.scheduler.PlatformDetector;
 import dev.bettervillagers.scheduler.SchedulerAdapter;
@@ -36,6 +38,8 @@ import java.util.Optional;
  * 所有跨线程边界遵循规范 0.1（Folia 区域调度模型）。
  */
 public final class BetterVillagersPlugin extends JavaPlugin {
+
+    private RegionSelectionListener regionSelection;
 
     @Override
     public void onEnable() {
@@ -94,6 +98,7 @@ public final class BetterVillagersPlugin extends JavaPlugin {
                 config.performance().getInt("trade-cache-max-size", 2000),
                 config.performance().getInt("trade-quantize-step", 8)));
         BV.building(new BuildingManager());
+        BV.building().restoreLayouts();
 
         // 8. 行为引擎（规范 3.1：三层决策）
         BehaviorEngine behavior = new BehaviorEngine(
@@ -118,7 +123,10 @@ public final class BetterVillagersPlugin extends JavaPlugin {
         BV.debug(new DebugMonitor());
 
         // 10. 命令与事件
-        BVCommand cmd = new BVCommand();
+        regionSelection = new RegionSelectionListener();
+        BVCommand cmd = new BVCommand(regionSelection);
+        BetterVillagersGui gui = new BetterVillagersGui(cmd, regionSelection);
+        cmd.gui(gui);
         var pluginCmd = getCommand("bettervillagers");
         if (pluginCmd != null) {
             pluginCmd.setExecutor(cmd);
@@ -126,6 +134,8 @@ public final class BetterVillagersPlugin extends JavaPlugin {
         }
         Bukkit.getPluginManager().registerEvents(new VillageEntryListener(), this);
         Bukkit.getPluginManager().registerEvents(new VillagerListener(), this);
+        Bukkit.getPluginManager().registerEvents(regionSelection, this);
+        Bukkit.getPluginManager().registerEvents(gui, this);
 
         // 11. 启动周期任务 + 注册已加载村民
         villagers.startTicking(
@@ -142,14 +152,19 @@ public final class BetterVillagersPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        // 取消所有进行中的施工任务（须在全局服务置 null 之前，避免 tick 回调 NPE）
-        BuildingManager building = BV.building();
-        if (building != null) {
-            building.shutdown();
-        }
+        // 先停止周期 tick 并同步保存；此时 AI 与存储服务仍可用。
         VillagerManager villagers = BV.villagers();
         if (villagers != null) {
             villagers.shutdown();
+        }
+        dev.bettervillagers.behavior.social.SocialEngine social = BV.socialEngine();
+        if (social != null) {
+            social.shutdown();
+        }
+        // 取消所有进行中的施工任务（须在全局服务置 null 之前，避免回调 NPE）
+        BuildingManager building = BV.building();
+        if (building != null) {
+            building.shutdown();
         }
         BehaviorEngine behavior = BV.behavior();
         if (behavior != null) {
@@ -162,6 +177,10 @@ public final class BetterVillagersPlugin extends JavaPlugin {
         StorageService storage = BV.storage();
         if (storage != null) {
             storage.close();
+        }
+        if (regionSelection != null) {
+            regionSelection.clearAll();
+            regionSelection = null;
         }
         if (BV.messages() != null) {
             BV.messages().broadcast("shutdown");

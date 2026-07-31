@@ -1,12 +1,10 @@
 package dev.bettervillagers.i18n;
 
 import dev.bettervillagers.BV;
-import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -161,11 +159,7 @@ public final class MessageService {
         return messages.getStringList("messages." + key);
     }
 
-    /** 前缀组件。 */
-    public Component prefix() {
-        return prefix;
-    }
-
+    /* 前缀组件。 */
     /**
      * 颜色格式解析（用户规则：支持原版颜色逻辑及其渐变色逻辑）。
      * <p>
@@ -199,11 +193,7 @@ public final class MessageService {
     /** 发送消息到指令发送者（自动附加前缀）。 */
     public void send(CommandSender sender, String key, String... pairs) {
         Component full = get(key, pairs);
-        if (sender instanceof Audience au) {
-            au.sendMessage(full);
-        } else {
-            sender.sendMessage(LegacyComponentSerializer.legacySection().serialize(full));
-        }
+        sender.sendMessage(full);
     }
 
     /** 广播消息（带前缀）。 */
@@ -219,14 +209,9 @@ public final class MessageService {
         }
     }
 
-    /**
-     * 获取控制台可显示的消息。控制台不支持 Minecraft 颜色码，因此只输出解析后的纯文本。
+    /*
+      获取控制台可显示的消息。控制台不支持 Minecraft 颜色码，因此只输出解析后的纯文本。
      */
-    public String console(String key, String... pairs) {
-        String text = applyPlaceholders(raw(key), pairs);
-        return PlainTextComponentSerializer.plainText().serialize(deserialize(text));
-    }
-
     /**
      * 向控制台发送带颜色的消息（现代 Paper/Folia 控制台支持 ANSI 24-bit 色）。
      * 直接把 Adventure 组件发给 {@link org.bukkit.command.ConsoleCommandSender}（其实现了 Audience），
@@ -235,12 +220,7 @@ public final class MessageService {
     public void sendConsoleRaw(String key, String... pairs) {
         Component full = deserialize(applyPlaceholders(raw(key), pairs));
         org.bukkit.command.ConsoleCommandSender console = org.bukkit.Bukkit.getConsoleSender();
-        if (console instanceof Audience au) {
-            au.sendMessage(full);
-        } else {
-            // 非 Paper 环境（纯 Spigot）回退纯文本
-            console.sendMessage(PlainTextComponentSerializer.plainText().serialize(full));
-        }
+        console.sendMessage(full);
     }
 
     /**

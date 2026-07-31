@@ -18,8 +18,5 @@ public record TradeOffer(
     public record EnchantSpec(String name, int level, boolean treasure) {
     }
 
-    /** 空附魔列表常量。 */
-    public static List<EnchantSpec> noEnchants() {
-        return List.of();
-    }
+    /* 空附魔列表常量。 */
 }

@@ -64,12 +64,12 @@ public final class MovementHelper {
             String key = self.getUniqueId().toString();
             long now = System.currentTimeMillis();
             // 节流：正在寻路时不要打断，除非目标显著变化或冷却已过
-            if (shouldSkipRepath(mob, key, target, now, distSq)) {
+            if (shouldSkipRepath(mob, key, target, now)) {
                 return;
             }
             try {
                 // 原版村民基础速度约 0.5，直接用 speed 作为倍率，不再放大
-                double pfSpeed = Math.max(0.3, Math.min(0.6, speed));
+                double pfSpeed = Math.clamp(speed, 0.3, 0.6);
                 mob.getPathfinder().moveTo(target, pfSpeed);
                 lastPathTime.put(key, now);
                 lastPathTarget.put(key, new Target(
@@ -90,7 +90,7 @@ public final class MovementHelper {
      * - 实体当前没有在寻路（hasPath=false），且
      * - 距上次规划已超过冷却时间，或目标位置变化超过 3 格。
      */
-    private static boolean shouldSkipRepath(Mob mob, String key, Location target, long now, double distSq) {
+    private static boolean shouldSkipRepath(Mob mob, String key, Location target, long now) {
         try {
             // 仍在走当前路径 → 不打断
             if (mob.getPathfinder().hasPath()) {
@@ -105,12 +105,9 @@ public final class MovementHelper {
         // 目标未显著变化（<3格）且冷却未过 → 跳过
         Target prev = lastPathTarget.get(key);
         Long last = lastPathTime.get(key);
-        if (prev != null && last != null && now - last < REPATH_COOLDOWN_MS) {
-            if (prev.samePlace(target)) {
-                return true;
-            }
-        }
-        return false;
+        return prev != null && last != null
+                && now - last < REPATH_COOLDOWN_MS
+                && prev.samePlace(target);
     }
 
     /** 清理实体的寻路节流状态。 */
@@ -159,7 +156,7 @@ public final class MovementHelper {
         if (dir.lengthSquared() < 0.01) {
             return;
         }
-        dir.normalize().multiply(Math.max(0.2, Math.min(0.4, speed)));
+        dir.normalize().multiply(Math.clamp(speed, 0.2, 0.4));
         self.setVelocity(dir);
     }
 }

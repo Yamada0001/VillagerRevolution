@@ -1,7 +1,9 @@
 package dev.bettervillagers.listener;
 
 import dev.bettervillagers.BV;
+import dev.bettervillagers.i18n.MessageService;
 import dev.bettervillagers.village.Village;
+import net.kyori.adventure.title.Title;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -9,6 +11,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,7 +32,7 @@ public final class VillageEntryListener implements Listener {
 
     @EventHandler
     public void onMove(PlayerMoveEvent event) {
-        if (event.getTo() == null || sameBlock(event.getFrom(), event.getTo())) {
+        if (sameBlock(event.getFrom(), event.getTo())) {
             return;
         }
         Player player = event.getPlayer();
@@ -89,9 +92,12 @@ public final class VillageEntryListener implements Listener {
             String subtitle = BV.messages().raw("village-entry-subtitle")
                     .replace("{king}", king)
                     .replace("{pop}", String.valueOf(BV.villages().countVillagersInVillage(current.id())));
-            player.sendTitle(title, subtitle, 10, 60, 20);
+            player.showTitle(Title.title(
+                    MessageService.deserialize(title),
+                    MessageService.deserialize(subtitle),
+                    Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(3), Duration.ofSeconds(1))));
             String actionBar = BV.messages().raw("village-entry-actionbar").replace("{village}", name);
-            player.sendActionBar(dev.bettervillagers.i18n.MessageService.deserialize(actionBar));
+            player.sendActionBar(MessageService.deserialize(actionBar));
         }, null);
     }
 
@@ -99,13 +105,13 @@ public final class VillageEntryListener implements Listener {
         BV.scheduler().runForEntity(player, () -> {
             String actionBar = BV.messages().raw("village-entry-actionbar")
                     .replace("{village}", villageName(current));
-            player.sendActionBar(dev.bettervillagers.i18n.MessageService.deserialize(actionBar));
+            player.sendActionBar(MessageService.deserialize(actionBar));
         }, null);
     }
 
     private void clearActionBar(Player player) {
         BV.scheduler().runForEntity(player, () ->
-                player.sendActionBar(dev.bettervillagers.i18n.MessageService.deserialize("")), null);
+                player.sendActionBar(MessageService.deserialize("")), null);
     }
 
     private String villageName(Village current) {

@@ -7,7 +7,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -118,36 +117,6 @@ public final class VillagerRepository {
             throw new RuntimeException(BV.messages().raw("errors.villager-query")
                     .replace("{uuid}", uuid).replace("{error}", e.getMessage()), e);
         }
-    }
-
-    public List<VillagerData> findByVillage(int villageId) {
-        List<VillagerData> out = new ArrayList<>();
-        try (Connection c = provider.connection();
-             PreparedStatement ps = c.prepareStatement("SELECT * FROM villagers WHERE village_id=?")) {
-            ps.setInt(1, villageId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    out.add(map(rs));
-                }
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException(BV.messages().raw("errors.villager-query-village").replace("{error}", e.getMessage()), e);
-        }
-        return out;
-    }
-
-    public List<VillagerData> findAll() {
-        List<VillagerData> out = new ArrayList<>();
-        try (Connection c = provider.connection();
-             PreparedStatement ps = c.prepareStatement("SELECT * FROM villagers");
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                out.add(map(rs));
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException(BV.messages().raw("errors.villager-query-all").replace("{error}", e.getMessage()), e);
-        }
-        return out;
     }
 
     public void delete(String uuid) {

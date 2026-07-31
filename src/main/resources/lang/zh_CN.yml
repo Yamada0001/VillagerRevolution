@@ -1,64 +1,66 @@
 # BetterVillagers 语言文件（简体中文）
 # 规范 6.2 / 用户规则：所有用户可见文本必须经由此处，禁止硬编码
 messages:
-  prefix: "&7[&6BetterVillagers&7] "
+  prefix: "<gradient:#eea2a2:#7ac5d8>[</gradient><gradient:#6a11cb:#2575fc>BetterVillagers</gradient><gradient:#eea2a2:#7ac5d8>] </gradient>"
 
   # ---------- 通用 ----------
-  no-permission: "&c你没有权限执行此操作。"
-  player-only: "&c该命令只能由玩家执行。"
-  unknown-command: "&c未知子命令，使用 &e/bv help &c查看帮助。"
-  reloaded: "&a配置已重载，共加载 {count} 个数据项。"
-  help-header: "&6===== &eBetterVillagers 帮助 &6====="
-  help-line: "&e{usage} &7- {desc}"
-  help-select-hint: "&7使用 &e/bv sel&7 后右键村民选择对象，再次输入可重新选择。"
-  selection-start: "&a选择模式已开启，请右键点击一名村民。"
+  no-permission: "<gradient:#f093fb:#f5576c>你没有权限执行此操作。</gradient>"
+  player-only: "<gradient:#f093fb:#f5576c>该命令只能由玩家执行。</gradient>"
+  unknown-command: "<gradient:#f093fb:#f5576c>未知子命令，使用 </gradient><gradient:#fa709a:#fee140>/bv help </gradient><gradient:#f093fb:#f5576c>查看帮助。</gradient>"
+  reloaded: "<gradient:#43e97b:#38f9d7>配置已重载，共加载 {count} 个数据项。</gradient>"
+  help-header: "<gradient:#6a11cb:#2575fc>===== </gradient><gradient:#fa709a:#fee140>BetterVillagers 帮助 </gradient><gradient:#6a11cb:#2575fc>=====</gradient>"
+  help-line: "<gradient:#fa709a:#fee140>{usage} </gradient><gradient:#eea2a2:#7ac5d8>- {desc}</gradient>"
+  help-select-hint: "<gradient:#eea2a2:#7ac5d8>使用 </gradient><gradient:#fa709a:#fee140>/bv sel</gradient><gradient:#eea2a2:#7ac5d8> 后右键村民选择对象，再次输入可重新选择。</gradient>"
+  selection-start: "<gradient:#43e97b:#38f9d7>选择模式已开启，请右键点击一名村民。</gradient>"
   # ---------- 传送（修复问题3） ----------
-  tp-success: "&a已传送到 &e{loc}"
-  tp-failed: "&c传送失败：坐标格式错误。"
-  tp-world-not-found: "&c世界 {world} 不存在。"
+  tp-success: "<gradient:#43e97b:#38f9d7>已传送到 </gradient><gradient:#fa709a:#fee140>{loc}</gradient>"
+  tp-failed: "<gradient:#f093fb:#f5576c>传送失败：坐标格式错误。</gradient>"
+  tp-world-not-found: "<gradient:#f093fb:#f5576c>世界 {world} 不存在。</gradient>"
 
   # ---------- 外交系统（问题5） ----------
   diplomacy:
     ally: "同盟"
     neutral: "中立"
     enemy: "敌对"
-  diplomacy-changed: "&6村庄外交关系变更为：&e{rel}"
+  diplomacy-changed: "<gradient:#6a11cb:#2575fc>村庄外交关系变更为：</gradient><gradient:#fa709a:#fee140>{rel}</gradient>"
 
   # ---------- 命令帮助描述（规范 7 / i18n） ----------
   help-reload: "重载配置"
   help-debug: "查看运行状态"
   help-profession: "指派村民职业"
   help-region: "生电保护区管理"
+  help-region-confirm: "确认当前保护区选区"
+  help-region-rename: "重命名生电保护区"
   help-village: "村庄信息"
   help-ai: "AI 控制"
 
   # ---------- 村民/职业 ----------
-  villager-attacked: "&c村民 {name} 正在遭受攻击！"
-  villager-not-found: "&c未找到指定的村民。"
-  villager-not-selected: "&c请先 &e右键点击&c 一名村民，再使用 /bv 相关指令。"
-  villager-selected: "&a已选定村民 &e{name}&a，可对其使用 /bv profession 与 /bv ai。"
+  villager-attacked: "<gradient:#f093fb:#f5576c>村民 {name} 正在遭受攻击！</gradient>"
+  villager-not-found: "<gradient:#f093fb:#f5576c>未找到指定的村民。</gradient>"
+  villager-not-selected: "<gradient:#f093fb:#f5576c>请先 </gradient><gradient:#fa709a:#fee140>右键点击</gradient><gradient:#f093fb:#f5576c> 一名村民，再使用 /bv 相关指令。</gradient>"
+  villager-selected: "<gradient:#43e97b:#38f9d7>已选定村民 </gradient><gradient:#fa709a:#fee140>{name}</gradient><gradient:#43e97b:#38f9d7>，可对其使用 /bv profession 与 /bv ai。</gradient>"
   fact-unknown: "未知"
   villager-default: "村民"
   village-id-format: "村庄#{id}"
 
   # ---------- 显示名格式（i18n：避免硬编码颜色码） ----------
   display:
-    villager-name-format: "&f{name}&r &7{profession}"
-  profession-set: "&a已将村民 {name} 的职业设为 &e{profession}&a。"
-  profession-locked: "&7村民 {name} 的职业已被管理员锁定。"
-  profession-invalid: "&c无效的职业：{profession}"
-  profession-cooldown: "&c村民 {name} 的转职冷却尚未结束。"
+    villager-name-format: "<gradient:#e0c3fc:#8ec5fc>{name}</gradient><reset> <gradient:#eea2a2:#7ac5d8>{profession}</gradient>"
+  profession-set: "<gradient:#43e97b:#38f9d7>已将村民 {name} 的职业设为 </gradient><gradient:#fa709a:#fee140>{profession}</gradient><gradient:#43e97b:#38f9d7>。</gradient>"
+  profession-locked: "<gradient:#eea2a2:#7ac5d8>村民 {name} 的职业已被管理员锁定。</gradient>"
+  profession-invalid: "<gradient:#f093fb:#f5576c>无效的职业：{profession}</gradient>"
+  profession-cooldown: "<gradient:#f093fb:#f5576c>村民 {name} 的转职冷却尚未结束。</gradient>"
 
   # ---------- 村庄 ----------
-  village-info: "&6村庄 {name} &7| 人口: &e{pop} &7| 中心: &e{loc} &7| 国王: &e{king}"
-  village-none: "&7附近未发现村庄。"
-  king-info: "&6国王 &e{name} &7| HP: &e{hp} &7| 状态: &e{state}"
-  king-absent: "&7该村庄当前没有国王。"
+  village-info: "<gradient:#6a11cb:#2575fc>村庄 {name} </gradient><gradient:#eea2a2:#7ac5d8>| 人口: </gradient><gradient:#fa709a:#fee140>{pop} </gradient><gradient:#eea2a2:#7ac5d8>| 中心: </gradient><gradient:#fa709a:#fee140>{loc} </gradient><gradient:#eea2a2:#7ac5d8>| 国王: </gradient><gradient:#fa709a:#fee140>{king}</gradient>"
+  village-none: "<gradient:#eea2a2:#7ac5d8>附近未发现村庄。</gradient>"
+  king-info: "<gradient:#6a11cb:#2575fc>国王 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#eea2a2:#7ac5d8>| HP: </gradient><gradient:#fa709a:#fee140>{hp} </gradient><gradient:#eea2a2:#7ac5d8>| 状态: </gradient><gradient:#fa709a:#fee140>{state}</gradient>"
+  king-absent: "<gradient:#eea2a2:#7ac5d8>该村庄当前没有国王。</gradient>"
 
   # ---------- 建造 ----------
-  building-started: "&a村民开始建造 &e{structure}&a。 &7&n[点击传送]"
-  building-completed: "&a建造完成：&e{structure}&a。 &7&n[点击传送]"
-  click-to-teleport: "&e点击传送到此位置"
+  building-started: "<gradient:#43e97b:#38f9d7>村民开始建造 </gradient><gradient:#fa709a:#fee140>{structure}</gradient><gradient:#43e97b:#38f9d7>。 </gradient><gradient:#eea2a2:#7ac5d8><underlined>[点击传送]</underlined></gradient>"
+  building-completed: "<gradient:#43e97b:#38f9d7>建造完成：</gradient><gradient:#fa709a:#fee140>{structure}</gradient><gradient:#43e97b:#38f9d7>。 </gradient><gradient:#eea2a2:#7ac5d8><underlined>[点击传送]</underlined></gradient>"
+  click-to-teleport: "<gradient:#fa709a:#fee140>点击传送到此位置</gradient>"
 
   # ---------- 建造类型名（规范 3.3 / i18n） ----------
   structure:
@@ -82,66 +84,84 @@ messages:
     defense_landscape: "景观与城墙"
 
   # ---------- 国王命令 ----------
-  king-command: "&6国王 {name}: {command}"
+  king-command: "<gradient:#6a11cb:#2575fc>国王 {name}: {command}</gradient>"
   village-entry-title: "{village}"
   village-entry-subtitle: "国王：{king}  |  人数：{pop}"
-  village-entry-actionbar: "&6当前位于 &e{village} &6村庄范围内"
-  village-entry-command: "&6{king}：&f{command}"
+  village-entry-actionbar: "<gradient:#6a11cb:#2575fc>当前位于 </gradient><gradient:#fa709a:#fee140>{village} </gradient><gradient:#6a11cb:#2575fc>村庄范围内</gradient>"
+  village-entry-command: "<gradient:#6a11cb:#2575fc>{king}：</gradient><gradient:#e0c3fc:#8ec5fc>{command}</gradient>"
   village-entry-unknown: "未知"
-  village-verify-start: "&7正在异步校验村庄数据（去重/合并重复实体）..."
+  village-verify-start: "<gradient:#eea2a2:#7ac5d8>正在异步校验村庄数据（去重/合并重复实体）...</gradient>"
+  village-verify-done: "<gradient:#43e97b:#38f9d7>村庄校验完成：扫描 </gradient><gradient:#fa709a:#fee140>{scanned} </gradient><gradient:#43e97b:#38f9d7>个村庄，合并 </gradient><gradient:#fa709a:#fee140>{merged} </gradient><gradient:#43e97b:#38f9d7>个，标记 </gradient><gradient:#fa709a:#fee140>{flagged} </gradient><gradient:#43e97b:#38f9d7>个异常指纹。</gradient>"
 
   # ---------- 生电模式 ----------
-  region-created: "&a生电保护区 &e{name} &a已创建。"
-  region-deleted: "&a生电保护区 &e{name} &a已删除。"
-  region-exists: "&c名称为 &e{name} &c的保护区已存在。"
-  region-not-found: "&c未找到保护区 &e{name}&c。"
-  region-list-header: "&6===== 生电保护区列表 ====="
-  region-list-line: "&e{name} &7| {world} &7({x1},{y1},{z1}) -> ({x2},{y2},{z2}) &7owner: &e{owner}"
-  region-none: "&7当前没有任何生电保护区。"
-  region-need-selection: "&c请先用 WorldEdit 选区。"
+  region-created: "<gradient:#43e97b:#38f9d7>生电保护区 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#43e97b:#38f9d7>已创建。</gradient>"
+  region-deleted: "<gradient:#43e97b:#38f9d7>生电保护区 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#43e97b:#38f9d7>已删除。</gradient>"
+  region-exists: "<gradient:#f093fb:#f5576c>名称为 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#f093fb:#f5576c>的保护区已存在。</gradient>"
+  region-not-found: "<gradient:#f093fb:#f5576c>未找到保护区 </gradient><gradient:#fa709a:#fee140>{name}</gradient><gradient:#f093fb:#f5576c>。</gradient>"
+  region-list-header: "<gradient:#6a11cb:#2575fc>===== 生电保护区列表 =====</gradient>"
+  region-list-line: "<gradient:#fa709a:#fee140>{name} </gradient><gradient:#eea2a2:#7ac5d8>| {world} </gradient><gradient:#eea2a2:#7ac5d8>({x1},{y1},{z1}) -> ({x2},{y2},{z2}) </gradient><gradient:#eea2a2:#7ac5d8>owner: </gradient><gradient:#fa709a:#fee140>{owner}</gradient>"
+  region-none: "<gradient:#eea2a2:#7ac5d8>当前没有任何生电保护区。</gradient>"
+  region-need-selection: "<gradient:#f093fb:#f5576c>请先完成保护区选区。</gradient>"
+  region-selection-start: "<gradient:#eea2a2:#7ac5d8>保护区选区已开启：左键方块设置第一点，右键方块设置第二点。</gradient>"
+  region-selection-first: "<gradient:#43e97b:#38f9d7>已设置第一点：</gradient><gradient:#fa709a:#fee140>{x}, {y}, {z}</gradient>"
+  region-selection-second: "<gradient:#43e97b:#38f9d7>已设置第二点：</gradient><gradient:#fa709a:#fee140>{x}, {y}, {z}</gradient>"
+  region-selection-world-mismatch: "<gradient:#f093fb:#f5576c>两个选点必须在同一个世界。</gradient>"
+  region-selection-first-required: "<gradient:#f093fb:#f5576c>请先左键方块设置第一点。</gradient>"
+  region-selection-confirm: "<gradient:#eea2a2:#7ac5d8>选区预览中，输入 <gradient:#fa709a:#fee140>/bv yes</gradient><gradient:#eea2a2:#7ac5d8> 确认创建。</gradient>"
+  region-selection-incomplete: "<gradient:#f093fb:#f5576c>请先左键设置第一点，并右键设置第二点。</gradient>"
+  region-rename-input: "<gradient:#eea2a2:#7ac5d8>请在聊天栏输入保护区 <gradient:#fa709a:#fee140>{name}</gradient><gradient:#eea2a2:#7ac5d8> 的新名称。</gradient>"
+  region-rename-empty: "<gradient:#f093fb:#f5576c>保护区名称不能为空。</gradient>"
+  region-renamed: "<gradient:#43e97b:#38f9d7>保护区已从 <gradient:#fa709a:#fee140>{old}</gradient><gradient:#43e97b:#38f9d7> 重命名为 <gradient:#fa709a:#fee140>{new}</gradient><gradient:#43e97b:#38f9d7>。</gradient>"
+  region-rename-failed: "<gradient:#f093fb:#f5576c>重命名失败：名称 <gradient:#fa709a:#fee140>{name}</gradient><gradient:#f093fb:#f5576c> 已被使用或保护区不存在。</gradient>"
+  region-rename-usage: "<gradient:#f093fb:#f5576c>用法：/bv rename 当前名字 新名字</gradient>"
 
   # ---------- AI ----------
-  ai-toggle-on: "&a已为村民 &e{name} &a启用 AI。"
-  ai-toggle-off: "&7已为村民 &e{name} &7禁用 AI。"
-  ai-reset: "&a已重置村民 &e{name} &a的 AI 记忆。"
-  ai-test-prompt: "&7正在测试村民 &e{name}&7 的 AI..."
-  ai-chat-start: "&7正在与村民 &e{name}&7 对话..."
-  ai-test-response: "&e{name}&7: &f{response}"
-  ai-circuit-open: "&cAI 熔断器已开启，临时降级为规则行为。"
-  ai-unavailable: "&cAI 服务不可用，已降级处理。"
+  ai-toggle-on: "<gradient:#43e97b:#38f9d7>已为村民 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#43e97b:#38f9d7>启用 AI。</gradient>"
+  ai-toggle-off: "<gradient:#eea2a2:#7ac5d8>已为村民 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#eea2a2:#7ac5d8>禁用 AI。</gradient>"
+  ai-reset: "<gradient:#43e97b:#38f9d7>已重置村民 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#43e97b:#38f9d7>的 AI 记忆。</gradient>"
+  ai-test-prompt: "<gradient:#eea2a2:#7ac5d8>正在测试村民 </gradient><gradient:#fa709a:#fee140>{name}</gradient><gradient:#eea2a2:#7ac5d8> 的 AI...</gradient>"
+  ai-chat-start: "<gradient:#eea2a2:#7ac5d8>正在与村民 </gradient><gradient:#fa709a:#fee140>{name}</gradient><gradient:#eea2a2:#7ac5d8> 对话...</gradient>"
+  ai-test-response: "<gradient:#fa709a:#fee140>{name}</gradient><gradient:#eea2a2:#7ac5d8>: </gradient><gradient:#e0c3fc:#8ec5fc>{response}</gradient>"
+  ai-circuit-open: "<gradient:#f093fb:#f5576c>AI 熔断器已开启，临时降级为规则行为。</gradient>"
+  ai-unavailable: "<gradient:#f093fb:#f5576c>AI 服务不可用，已降级处理。</gradient>"
 
   # ---------- 跨职业社交（规范 3.3：村民攀谈内容，AI 不可用时回退） ----------
   social:
     chat-default: "今天天气不错"
-    # 攀谈头顶标签格式（i18n：原硬编码颜色码 &e，已提取为键）
-    chat-label-format: "&e\"{text}\""
+    # 攀谈头顶标签格式（i18n：已提取为键）
+    chat-label-format: "<gradient:#fa709a:#fee140>\"{text}\"</gradient>"
+    chat-bubble-format: "<gradient:#fa709a:#fee140>\"{text}\"</gradient>"
+    trade-fallback: "交易完成"
     chat-lines:
-      - "{profession}兄弟，最近生意如何？"
-      - "听说村外又有怪物出没，多加小心。"
-      - "今年的收成看起来不错。"
-      - "集市上的货物越来越丰富了。"
-      - "城墙修缮得如何了？需要搭把手吗？"
-      - "井水还很清澈，不用担心。"
-      - "夜里记得关好门窗。"
-      - "有空一起去市集逛逛吧。"
-      - "你那边的活儿忙完了吗？"
-      - "今天辛苦了，注意休息。"
+      - "{name}，{profession}的活儿还顺利吗？"
+      - "{name}，你负责的{profession}工作辛苦了。"
+      - "{name}，今天的{profession}职责忙完了吗？"
 
   # Prompt 模板已迁移到独立文件 prompt.yml（规范 6.2）
 
   # ---------- 跨职业社交 AI 提示词回退（prompt.yml 缺失时使用） ----------
   ai-prompt:
-    social-chat-system: "你是 Minecraft 中世纪村庄的村民，正在与另一职业的邻居攀谈。只回复一句简短、自然的日常问候或闲聊（10到20个汉字，不要解释你是 AI，不要输出引号或标点以外的符号）。"
-    social-chat-user: "村民: {name}（职业: {profession}）遇到了 {partner}（职业: {partner-profession}）。请给出一句攀谈内容。"
+    social-chat-system: "你是 Minecraft 中世纪村庄的村民，正与一位不同职业的邻居在路上相遇并驻足攀谈。只回复一句简短、自然、贴合村庄日常的闲聊（10到20个汉字）。必须直接点名对方，并围绕对方职业应做的职责进行问候或关心。禁止解释你是 AI，禁止输出引号或多余符号。"
+    social-chat-user: "村民: {name}（职业: {profession}）遇到了 {partner}（职业: {partner-profession}）。回复必须包含“{partner}”，并问候其作为 {partner-profession} 应做的事情。"
+    chat-system: "你是 Minecraft 中世纪村庄里的一位 {profession}，名叫 {name}。村庄名称是「{village}」，国王是「{king}」，人口约 {pop} 人。玩家当前手持和穿戴的真实物品为：{equipment}。回答村庄或玩家装备相关问题时必须且只能使用上述事实；不知道时明确说不知道，禁止编造其它国王名、村名、人数或物品。用符合身份的口吻简短回答（一到两句话，不要解释你是 AI）。"
+    chat-user: "真实事实：我叫 {name}，村庄 {village}，国王 {king}，人口 {pop}，玩家装备 {equipment}。玩家问：{message}"
+    chat-equipment-empty: "未手持或穿戴任何物品"
+    chat-equipment-entry: "{slot}：{item} x{amount}"
+    chat-equipment-slot:
+      main-hand: "主手"
+      helmet: "头盔"
+      chestplate: "胸甲"
+      leggings: "护腿"
+      boots: "靴子"
 
   # ---------- 调试 ----------
-  debug-header: "&6===== BetterVillagers 运行状态 ====="
-  debug-platform: "&7平台: &e{platform}"
-  debug-online-villagers: "&7在线村民: &e{count}"
-  debug-active-ai: "&7活跃 AI 任务: &e{count}"
-  debug-circuit: "&7熔断状态: &e{state}"
-  debug-provider-latency: "&7provider 延迟/错误率: &e{stats}"
-  debug-region-load: "&7区域线程负载: &e{stats}"
+  debug-header: "<gradient:#6a11cb:#2575fc>===== BetterVillagers 运行状态 =====</gradient>"
+  debug-platform: "<gradient:#eea2a2:#7ac5d8>平台: </gradient><gradient:#fa709a:#fee140>{platform}</gradient>"
+  debug-online-villagers: "<gradient:#eea2a2:#7ac5d8>在线村民: </gradient><gradient:#fa709a:#fee140>{count}</gradient>"
+  debug-active-ai: "<gradient:#eea2a2:#7ac5d8>活跃 AI 任务: </gradient><gradient:#fa709a:#fee140>{count}</gradient>"
+  debug-circuit: "<gradient:#eea2a2:#7ac5d8>熔断状态: </gradient><gradient:#fa709a:#fee140>{state}</gradient>"
+  debug-provider-latency: "<gradient:#eea2a2:#7ac5d8>provider 延迟/错误率: </gradient><gradient:#fa709a:#fee140>{stats}</gradient>"
+  debug-region-load: "<gradient:#eea2a2:#7ac5d8>区域线程负载: </gradient><gradient:#fa709a:#fee140>{stats}</gradient>"
 
   # ---------- 系统日志（规范 4.5 / i18n） ----------
   log:
@@ -167,7 +187,9 @@ messages:
     recovery-start: "开始补录 {count} 个降级文件..."
     recovery-done: "降级补录完成，成功 {success}/{total}"
     recovery-fail: "补录 {file} 失败: {error}"
+    village-merged: "村庄合并完成 #{from}→#{to}"
     memory-cleanup: "清理 {count} 个不活跃/死亡村民"
+    ai-memory-parse-fail: "AIMemory 解析失败，已忽略损坏记忆: {error}"
     ai-decide-exception: "AI 决策异常: {error}"
     provider-failed: "provider {id} 失败: {error}"
     provider-error: "provider {id} 异常: {error}"
@@ -312,6 +334,9 @@ messages:
       - "碧水"
       - "烈焰"
       - "寒霜"
+    village-prefix-fallback:
+      - "晨曦"
+      - "暮色"
     village-suffix:
       - "镇"
       - "村"
@@ -320,33 +345,163 @@ messages:
       - "港"
       - "营"
       - "庄"
+    village-suffix-fallback:
+      - "镇"
+      - "村"
+
+  # ---------- 原生库存 GUI ----------
+  gui:
+    title:
+      main: "<gradient:#6a11cb:#2575fc>BetterVillagers 管理菜单</gradient>"
+      profession: "<gradient:#6a11cb:#2575fc>职业选择</gradient>"
+      ai: "<gradient:#6a11cb:#2575fc>AI 管理</gradient>"
+      village: "<gradient:#6a11cb:#2575fc>村庄信息</gradient>"
+      region: "<gradient:#6a11cb:#2575fc>保护区管理</gradient>"
+      system: "<gradient:#6a11cb:#2575fc>系统管理</gradient>"
+    common:
+      locked:
+        name: "<red>功能已锁定</red>"
+        lore:
+          - "<gray>你没有权限使用此功能</gray>"
+      close:
+        name: "<red>关闭菜单</red>"
+        lore: []
+      back:
+        name: "<yellow>返回主菜单</yellow>"
+        lore: []
+      previous:
+        name: "<yellow>上一页</yellow>"
+        lore: []
+      next:
+        name: "<yellow>下一页</yellow>"
+        lore: []
+    main:
+      villager:
+        name: "<gold>村民管理</gold>"
+        lore:
+          - "<gray>开始选择要管理的村民</gray>"
+      profession:
+        name: "<gold>职业选择</gold>"
+        lore:
+          - "<gray>为已选择的村民分配职业</gray>"
+      ai:
+        name: "<gold>AI 管理</gold>"
+        lore:
+          - "<gray>控制已选择村民的 AI</gray>"
+      village:
+        name: "<gold>村庄信息</gold>"
+        lore:
+          - "<gray>查看附近村庄的数据</gray>"
+      region:
+        name: "<gold>保护区管理</gold>"
+        lore:
+          - "<gray>管理生电保护区</gray>"
+      system:
+        name: "<gold>系统管理</gold>"
+        lore:
+          - "<gray>查看状态或重载配置</gray>"
+    profession:
+      entry:
+        name: "<gold>{profession}</gold>"
+        lore:
+          - "<gray>点击分配此职业</gray>"
+    ai:
+      toggle:
+        name: "<gold>切换 AI</gold>"
+        lore:
+          - "<gray>启用或禁用已选择村民的 AI</gray>"
+      reset:
+        name: "<gold>重置 AI 记忆</gold>"
+        lore:
+          - "<gray>清除已选择村民的 AI 记忆</gray>"
+      test:
+        name: "<gold>测试 AI</gold>"
+        lore:
+          - "<gray>关闭菜单后输入测试指令</gray>"
+      chat:
+        name: "<gold>与村民对话</gold>"
+        lore:
+          - "<gray>关闭菜单后输入对话指令</gray>"
+    village:
+      info:
+        name: "<gold>村庄信息</gold>"
+        lore:
+          - "<gray>名称: <yellow>{name}</yellow>"
+          - "<gray>ID: <yellow>{id}</yellow>"
+          - "<gray>中心: <yellow>{location}</yellow>"
+          - "<gray>半径: <yellow>{radius}</yellow>"
+      king:
+        name: "<gold>国王信息</gold>"
+        lore:
+          - "<gray>当前国王: <yellow>{name}</yellow>"
+      stats:
+        name: "<gold>村庄统计</gold>"
+        lore:
+          - "<gray>实时人口: <yellow>{population}</yellow>"
+          - "<gray>村庄半径: <yellow>{radius}</yellow>"
+      none:
+        name: "<red>附近未发现村庄</red>"
+        lore: []
+      verify:
+        name: "<gold>校验村庄数据</gold>"
+        lore:
+          - "<gray>点击后关闭菜单并开始校验</gray>"
+    region:
+      entry:
+        name: "<gold>{name}</gold>"
+        lore:
+          - "<gray>{world} ({x1},{y1},{z1}) -> ({x2},{y2},{z2})</gray>"
+          - "<gray>所有者: {owner}</gray>"
+          - "<yellow>左键: 显示边界</yellow>"
+          - "<yellow>右键: 查看信息</yellow>"
+          - "<yellow>Shift+左键: 重命名</yellow>"
+          - "<red>Shift+右键: 删除</red>"
+      create:
+        name: "<gold>创建保护区</gold>"
+        lore:
+          - "<gray>关闭菜单后左键第一点、右键第二点</gray>"
+          - "<gray>输入 /bv yes 确认创建</gray>"
+    system:
+      select:
+        name: "<gold>选择村民</gold>"
+        lore: []
+      debug:
+        name: "<gold>调试信息</gold>"
+        lore: []
+      reload:
+        name: "<gold>重载配置</gold>"
+        lore: []
+    prompt:
+      region-create: "<yellow>请使用 <gold>/bv region create <名称></gold> 创建保护区。</yellow>"
+      ai-test: "<yellow>请使用 <gold>/bv ai test <提示词></gold> 测试已选择村民的 AI。</yellow>"
+      ai-chat: "<yellow>请使用 <gold>/bv ai chat <消息></gold> 与已选择村民对话。</yellow>"
 
   # ---------- 系统 ----------
   startup: |-
     <gradient:#d7ff7b:#d0ff7a:#cafe79:#c3fe77:#bcfd76:#b6fd75:#affc74:#a8fc73:#a2fc71:#9bfb70:#94fb6f:#8efa6e:#87fa6d:#80f96c:#7af96a:#73f969:#6cf868:#66f867:#5ff766:#58f764:#52f663:#4bf662>VillagerRevolution启动成功</gradient>
-  shutdown: "&cBetterVillagers 已禁用，数据已保存。"
+  shutdown: "<gradient:#f093fb:#f5576c>BetterVillagers 已禁用，数据已保存。</gradient>"
 
   # ---------- 职业显示名 ----------
   professions:
-    king: "&6国王"
-    knight: "&b骑士"
-    soldier: "&7士兵"
-    archer: "&a弓箭手"
-    butcher: "&c屠夫"
-    chef: "&e厨师"
-    farmer: "&a农民"
-    miner: "&f矿工"
-    builder: "&d建筑师"
-    merchant: "&6商人"
-    doctor: "&a医生"
-    fisherman: "&b渔夫"
-    enchanter: "&5附魔师"
-    blacksmith: "&8铁匠"
-    civilian: "&7村民"
+    king: "<gradient:#6a11cb:#2575fc>国王</gradient>"
+    knight: "<gradient:#4facfe:#00f2fe>骑士</gradient>"
+    soldier: "<gradient:#eea2a2:#7ac5d8>士兵</gradient>"
+    archer: "<gradient:#43e97b:#38f9d7>弓箭手</gradient>"
+    butcher: "<gradient:#f093fb:#f5576c>屠夫</gradient>"
+    chef: "<gradient:#fa709a:#fee140>厨师</gradient>"
+    farmer: "<gradient:#43e97b:#38f9d7>农民</gradient>"
+    miner: "<gradient:#e0c3fc:#8ec5fc>矿工</gradient>"
+    builder: "<gradient:#e0c3fc:#8ec5fc>建筑师</gradient>"
+    merchant: "<gradient:#6a11cb:#2575fc>商人</gradient>"
+    doctor: "<gradient:#43e97b:#38f9d7>医生</gradient>"
+    fisherman: "<gradient:#4facfe:#00f2fe>渔夫</gradient>"
+    enchanter: "<gradient:#6a11cb:#2575fc>附魔师</gradient>"
+    blacksmith: "<gradient:#eea2a2:#7ac5d8>铁匠</gradient>"
+    civilian: "<gradient:#eea2a2:#7ac5d8>村民</gradient>"
   behavior:
     doctor-healing: "医生正在治疗重伤村民"
     fisherman-fishing: "渔夫正在钓鱼"
     farmer-gathering: "农民正在收集物资"
     enchanter-enchanting: "附魔师正在强化装备"
     blacksmith-repairing: "铁匠正在修复铁傀儡"
-  hearts: "&c❤"
+  hearts: "<gradient:#f093fb:#f5576c>❤</gradient>"

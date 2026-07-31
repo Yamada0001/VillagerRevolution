@@ -15,11 +15,9 @@ import java.util.List;
 public final class VillageRepository {
 
     private final DataSourceProvider provider;
-    private final boolean mysql;
 
-    public VillageRepository(DataSourceProvider provider, boolean mysql) {
+    public VillageRepository(DataSourceProvider provider) {
         this.provider = provider;
-        this.mysql = mysql;
     }
 
     public int insert(Village v) {

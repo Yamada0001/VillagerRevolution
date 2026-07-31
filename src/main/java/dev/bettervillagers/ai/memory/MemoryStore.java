@@ -18,7 +18,7 @@ public final class MemoryStore {
     }
 
     public AIMemory get(String uuid) {
-        return store.computeIfAbsent(uuid, k -> new AIMemory(maxHistory));
+        return store.computeIfAbsent(uuid, ignored -> new AIMemory(maxHistory));
     }
 
     /** 以已持久化的 JSON 恢复记忆（村民加载时调用）。 */
@@ -36,7 +36,4 @@ public final class MemoryStore {
         return m == null ? "[]" : m.toJson();
     }
 
-    public void clearAll() {
-        store.clear();
-    }
 }

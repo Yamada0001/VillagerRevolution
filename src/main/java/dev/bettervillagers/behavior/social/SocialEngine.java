@@ -8,239 +8,212 @@ import dev.bettervillagers.i18n.MessageService;
 import dev.bettervillagers.villager.BVillager;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Location;
+import org.bukkit.entity.Display;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.TextDisplay;
 import org.bukkit.entity.Villager;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.MerchantRecipe;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 
-/**
- * 跨职业社交引擎（规范 3.3：村民 AI 跨职业相遇交互）。
- * <p>
- * 当任意两个<b>不同职业</b>的村民 AI 在移动路径中发生交汇（距离 ≤ 相遇半径）时，
- * 自动触发驻足攀谈的社交行为：
- * <ul>
- *   <li>双方停止移动，转为 {@link VillagerState#SOCIALIZING} 状态并面朝对方；</li>
- *   <li>异步调用预设 AI 模型生成简短攀谈内容（AI 不可用时回退到 i18n 模板短语）；</li>
- *   <li>攀谈期间在村民头顶显示标签（标签为聊天内容），交互时长贴合原版村民社交基础规则；</li>
- *   <li>交互结束后恢复头顶名称显示，进入攀谈冷却。</li>
- * </ul>
- * <p>
- * 触发条件遵循原版村民社交基础规则：仅在白天/非威胁环境下攀谈，战斗/逃跑中不社交。
- * 全部 AI 请求与名称写操作均异步/区域线程安全，不阻塞主线程 tick。
- */
+/** 跨职业村民的社交、聊天和交易展示。 */
 public final class SocialEngine {
 
-    /** 相遇判定半径（格）。 */
-    private static final double ENCOUNTER_RANGE = 3.5;
-    private static final double ENCOUNTER_RANGE_SQ = ENCOUNTER_RANGE * ENCOUNTER_RANGE;
-    /** 攀谈持续时长（毫秒，贴合原版村民 gossip 约 5 秒）。 */
-    private static final long CHAT_DURATION_MS = 5000L;
-    /** 攀谈冷却（毫秒，避免同一对村民频繁攀谈）。 */
-    private static final long CHAT_COOLDOWN_MS = 30_000L;
-    /** 攀谈内容最大长度。 */
-    private static final int MAX_CHAT_LEN = 32;
-    /** Minecraft 夜间起始 tick（13000）与结束 tick（23000），与 StrategicAI 共用语义。 */
     private static final long NIGHT_START_TICKS = 13000L;
     private static final long NIGHT_END_TICKS = 23000L;
 
-    /** 正在攀谈中的村民 UUID 集合（原子占位，防止并发重复触发）。 */
     private final Set<String> engaged = ConcurrentHashMap.newKeySet();
-    private final ConcurrentHashMap<String, Integer> friendship = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Long> breedingCooldown = new ConcurrentHashMap<>();
-    private static final int BREEDING_THRESHOLD = 100;
-    private static final long BREEDING_COOLDOWN_MS = 120_000L;
+    private final ConcurrentHashMap<String, List<Entity>> displays = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ChatSession> chatSessions = new ConcurrentHashMap<>();
+    private volatile boolean shutdown;
 
-    /**
-     * 执行一次社交检测（由社交 tick 经实体区域线程调用）。
-     */
     public void tickSocial(BVillager bv) {
+        if (shutdown) {
+            return;
+        }
         LivingEntity self = bv.entity();
         if (self == null || self.isDead()) {
             return;
         }
         long now = System.currentTimeMillis();
-
-        // D7 修复：超时兜底，防止异常路径导致 UUID 永久残留于 engaged（被卡住的村民此后无法社交）。
+        ChatSession activeSession = chatSessions.get(bv.uuid());
+        if (activeSession != null) {
+            if (now >= activeSession.deadlineMillis()
+                    || bv.state() == VillagerState.COMBAT || bv.state() == VillagerState.FLEEING) {
+                finishSession(activeSession);
+            } else if (bv.state() != VillagerState.SOCIALIZING) {
+                bv.state(VillagerState.SOCIALIZING);
+            }
+            return;
+        }
         if (engaged.contains(bv.uuid())
                 && bv.state() != VillagerState.SOCIALIZING
-                && now - bv.lastSocialTime() > CHAT_DURATION_MS * 2) {
+                && now - bv.lastSocialTime() > chatDurationMillis() * 2) {
             engaged.remove(bv.uuid());
+            clearDisplays(bv.uuid());
         }
-
-        // 正在攀谈：检查是否到时结束
         if (bv.state() == VillagerState.SOCIALIZING) {
-            if (now - bv.lastSocialTime() >= CHAT_DURATION_MS) {
+            if (now - bv.lastSocialTime() >= chatDurationMillis()) {
                 endChat(bv);
             }
             return;
         }
-        // 战斗/逃跑中不社交
-        VillagerState st = bv.state();
-        if (st == VillagerState.COMBAT || st == VillagerState.FLEEING) {
+        VillagerState state = bv.state();
+        if (state == VillagerState.COMBAT || state == VillagerState.FLEEING) {
             return;
         }
-        // 夜间不攀谈（贴合原版村民夜间不社交）
         long worldTime = self.getWorld().getTime();
         if (worldTime >= NIGHT_START_TICKS && worldTime <= NIGHT_END_TICKS) {
             return;
         }
-        // 攀谈冷却
-        if (now - bv.lastSocialTime() < CHAT_COOLDOWN_MS) {
+        if (now - bv.lastSocialTime() < chatCooldownMillis() || engaged.contains(bv.uuid())) {
             return;
         }
-        // 已被占位（正在被其他村民触发攀谈）
-        if (engaged.contains(bv.uuid())) {
-            return;
-        }
-        // 扫描附近不同职业的村民
         BVillager partner = findPartner(bv, self);
         if (partner == null) {
             return;
         }
-        LivingEntity partnerEnt = partner.entity();
-        if (partnerEnt == null || partnerEnt.isDead()) {
+        LivingEntity partnerEntity = partner.entity();
+        if (partnerEntity == null || partnerEntity.isDead() || !tryEngage(bv.uuid(), partner.uuid())) {
             return;
         }
-        if (!tryEngage(bv.uuid(), partner.uuid())) {
-            return;
-        }
-        if (ThreadLocalRandom.current().nextDouble() < 0.35) {
-            startTrade(bv, partner, self, partnerEnt, now);
+        if (ThreadLocalRandom.current().nextDouble() < tradeChance()) {
+            startTrade(bv, partner, self, partnerEntity, now);
         } else {
-            startChat(bv, partner, self, partnerEnt, now);
+            startChat(bv, partner, self, partnerEntity, now);
         }
     }
 
-    /** 寻找附近可攀谈的不同职业村民。 */
     private BVillager findPartner(BVillager bv, LivingEntity self) {
-        for (org.bukkit.entity.Entity nearby : self.getNearbyEntities(ENCOUNTER_RANGE, 2, ENCOUNTER_RANGE)) {
-            if (!(nearby instanceof Villager v) || v.isDead()) {
+        double range = BV.config().raw().getDouble("social.encounter-range");
+        double rangeSquared = range * range;
+        for (Entity nearby : self.getNearbyEntities(range, BV.config().raw().getDouble("social.encounter-height"), range)) {
+            if (!(nearby instanceof Villager villager) || villager.isDead() || BV.villagers() == null) {
                 continue;
             }
-            if (BV.villagers() == null) {
+            BVillager other = BV.villagers().get(villager.getUniqueId().toString()).orElse(null);
+            if (other == null || other.uuid().equals(bv.uuid()) || other.profession() == bv.profession()) {
                 continue;
             }
-            BVillager other = BV.villagers().get(v.getUniqueId().toString()).orElse(null);
-            if (other == null || other.uuid().equals(bv.uuid())) {
+            VillagerState otherState = other.state();
+            if (otherState == VillagerState.COMBAT || otherState == VillagerState.FLEEING
+                    || otherState == VillagerState.SOCIALIZING
+                    || System.currentTimeMillis() - other.lastSocialTime() < chatCooldownMillis()
+                    || engaged.contains(other.uuid())) {
                 continue;
             }
-            // 仅跨职业攀谈（同职业不触发专属社交标签）
-            if (other.profession() == bv.profession()) {
-                continue;
-            }
-            // 对方须可社交
-            VillagerState ost = other.state();
-            if (ost == VillagerState.COMBAT || ost == VillagerState.FLEEING || ost == VillagerState.SOCIALIZING) {
-                continue;
-            }
-            if (System.currentTimeMillis() - other.lastSocialTime() < CHAT_COOLDOWN_MS) {
-                continue;
-            }
-            if (engaged.contains(other.uuid())) {
-                continue;
-            }
-            double d = self.getLocation().distanceSquared(v.getLocation());
-            if (d <= ENCOUNTER_RANGE_SQ) {
+            if (self.getLocation().distanceSquared(villager.getLocation()) <= rangeSquared) {
                 return other;
             }
         }
         return null;
     }
 
-    /** 原子占位两个村民，确保不并发重复触发。 */
-    private boolean tryEngage(String a, String b) {
-        if (!engaged.add(a)) {
+    private boolean tryEngage(String first, String second) {
+        if (!engaged.add(first)) {
             return false;
         }
-        if (!engaged.add(b)) {
-            engaged.remove(a);
+        if (!engaged.add(second)) {
+            engaged.remove(first);
             return false;
         }
         return true;
     }
 
-    /** 启动攀谈：双方驻足、面朝对方、生成内容并显示标签。 */
-    private void startChat(BVillager a, BVillager b, LivingEntity aEnt, LivingEntity bEnt, long now) {
-        a.state(VillagerState.SOCIALIZING);
-        a.lastSocialTime(now);
-        // A 在自身区域线程内面朝 B（当前位置快照即可）
-        Location bLoc = bEnt.getLocation();
-        aEnt.setRotation(yawTowards(aEnt.getLocation(), bLoc), 0f);
-        // D2 修复：B 可能位于另一区域线程，其状态写入与朝向操控须 dispatch 到 B 自身区域线程。
-        BV.scheduler().runForEntity(bEnt, () -> {
-            b.state(VillagerState.SOCIALIZING);
-            b.lastSocialTime(now);
-            Location aLoc = aEnt.getLocation();
-            bEnt.setRotation(yawTowards(bEnt.getLocation(), aLoc), 0f);
-        }, null);
-        // 异步生成攀谈内容（AI 不可用时回退 i18n 模板）
-        requestChatContent(a, b);
-    }
-
-    private void startTrade(BVillager a, BVillager b, LivingEntity aEnt, LivingEntity bEnt, long now) {
-        a.state(VillagerState.TRADING);
-        a.lastSocialTime(now);
-        if (!(aEnt instanceof Villager traderA) || !(bEnt instanceof Villager traderB)
-                || BV.trade() == null || !traderA.isValid() || !traderB.isValid()) {
-            endTrade(a);
+    private void startChat(BVillager first, BVillager second, LivingEntity firstEntity, LivingEntity secondEntity, long now) {
+        ChatSession session = new ChatSession(first, second, now + chatDurationMillis());
+        if (chatSessions.putIfAbsent(first.uuid(), session) != null) {
+            releasePair(first.uuid(), second.uuid());
             return;
         }
-        BV.scheduler().runForEntity(bEnt, () -> {
-            if (!traderB.isValid()) {
-                endTrade(b);
+        if (chatSessions.putIfAbsent(second.uuid(), session) != null) {
+            chatSessions.remove(first.uuid(), session);
+            releasePair(first.uuid(), second.uuid());
+            return;
+        }
+        first.state(VillagerState.SOCIALIZING);
+        first.lastSocialTime(now);
+        firstEntity.setRotation(yawTowards(firstEntity.getLocation(), secondEntity.getLocation()), 0f);
+        BV.scheduler().runForEntity(secondEntity, () -> {
+            if (shutdown || System.currentTimeMillis() >= session.deadlineMillis()
+                    || !firstEntity.isValid() || !secondEntity.isValid()) {
+                finishSession(session);
                 return;
             }
-            List<MerchantRecipe> recipes = traderB.getRecipes();
+            second.state(VillagerState.SOCIALIZING);
+            second.lastSocialTime(now);
+            secondEntity.setRotation(yawTowards(secondEntity.getLocation(), firstEntity.getLocation()), 0f);
+            requestChatContent(session, first, second);
+        }, () -> finishSession(session));
+    }
+
+    private void startTrade(BVillager first, BVillager second, LivingEntity firstEntity, LivingEntity secondEntity, long now) {
+        first.state(VillagerState.TRADING);
+        first.lastSocialTime(now);
+        if (!(firstEntity instanceof Villager traderFirst) || !(secondEntity instanceof Villager traderSecond)
+                || BV.trade() == null || !traderFirst.isValid() || !traderSecond.isValid()) {
+            endTrade(first);
+            return;
+        }
+        BV.scheduler().runForEntity(secondEntity, () -> {
+            if (!traderSecond.isValid()) {
+                endTrade(second);
+                return;
+            }
+            List<MerchantRecipe> recipes = traderSecond.getRecipes();
             if (recipes.isEmpty()) {
-                endTrade(b);
-                BV.scheduler().runForEntity(aEnt, () -> endTrade(a), null);
+                endTrade(second);
+                BV.scheduler().runForEntity(firstEntity, () -> endTrade(first), () -> release(first.uuid()));
                 return;
             }
             MerchantRecipe recipe = recipes.get(ThreadLocalRandom.current().nextInt(recipes.size()));
             if (recipe.getUses() >= recipe.getMaxUses()) {
-                endTrade(b);
-                BV.scheduler().runForEntity(aEnt, () -> endTrade(a), null);
+                endTrade(second);
+                BV.scheduler().runForEntity(firstEntity, () -> endTrade(first), () -> release(first.uuid()));
                 return;
             }
             List<ItemStack> ingredients = recipe.getIngredients().stream().map(ItemStack::clone).toList();
             ItemStack result = recipe.getResult().clone();
-            b.state(VillagerState.TRADING);
-            b.lastSocialTime(now);
-            BV.scheduler().runForEntity(aEnt, () -> {
-                if (!traderA.isValid() || !traderB.isValid() || !canPay(traderA.getInventory(), ingredients)) {
-                    endTrade(a);
-                    BV.scheduler().runForEntity(bEnt, () -> endTrade(b), null);
+            second.state(VillagerState.TRADING);
+            second.lastSocialTime(now);
+            BV.scheduler().runForEntity(firstEntity, () -> {
+                if (!traderFirst.isValid() || !traderSecond.isValid() || !canPay(traderFirst.getInventory(), ingredients)) {
+                    endTrade(first);
+                    BV.scheduler().runForEntity(secondEntity, () -> endTrade(second), () -> release(second.uuid()));
                     return;
                 }
                 for (ItemStack ingredient : ingredients) {
-                    remove(traderA.getInventory(), ingredient);
+                    remove(traderFirst.getInventory(), ingredient);
                 }
-                traderA.getInventory().addItem(result);
-                traderA.getWorld().spawnParticle(org.bukkit.Particle.HEART, traderA.getLocation().add(0, 2, 0), 2);
-                BV.scheduler().runForEntity(bEnt, () -> {
-                    if (!traderB.isValid()) {
+                traderFirst.getInventory().addItem(result);
+                traderFirst.getWorld().spawnParticle(org.bukkit.Particle.HEART, traderFirst.getLocation().add(0, 2, 0), 2);
+                showTradeDisplay(first.uuid(), traderFirst, List.of(result));
+                BV.scheduler().runForEntity(secondEntity, () -> {
+                    if (!traderSecond.isValid()) {
                         return;
                     }
                     for (ItemStack ingredient : ingredients) {
-                        traderB.getInventory().addItem(ingredient.clone());
+                        traderSecond.getInventory().addItem(ingredient.clone());
                     }
                     recipe.setUses(recipe.getUses() + 1);
                     recipe.setDemand(recipe.getDemand() + 1);
-                    traderB.setRecipes(recipes);
-                    traderB.getWorld().spawnParticle(org.bukkit.Particle.HEART, traderB.getLocation().add(0, 2, 0), 2);
-                    recordTrade(a, 10);
-                    recordTrade(b, 10);
-                    endTrade(b);
-                }, null);
-                endTrade(a);
-            }, null);
-        }, null);
+                    traderSecond.setRecipes(recipes);
+                    traderSecond.getWorld().spawnParticle(org.bukkit.Particle.HEART, traderSecond.getLocation().add(0, 2, 0), 2);
+                    showTradeDisplay(second.uuid(), traderSecond, ingredients);
+                    endTrade(second);
+                }, () -> release(second.uuid()));
+                endTrade(first);
+            }, () -> release(first.uuid()));
+        }, () -> release(second.uuid()));
     }
 
     private boolean canPay(Inventory inventory, List<ItemStack> ingredients) {
@@ -255,7 +228,9 @@ public final class SocialEngine {
     private boolean contains(Inventory inventory, ItemStack wanted) {
         int total = 0;
         for (ItemStack stack : inventory.getContents()) {
-            if (stack != null && stack.isSimilar(wanted)) total += stack.getAmount();
+            if (stack != null && stack.isSimilar(wanted)) {
+                total += stack.getAmount();
+            }
         }
         return total >= wanted.getAmount();
     }
@@ -263,7 +238,9 @@ public final class SocialEngine {
     private void remove(Inventory inventory, ItemStack wanted) {
         int remaining = wanted.getAmount();
         for (ItemStack stack : inventory.getContents()) {
-            if (remaining == 0) return;
+            if (remaining == 0) {
+                return;
+            }
             if (stack != null && stack.isSimilar(wanted)) {
                 int used = Math.min(remaining, stack.getAmount());
                 stack.setAmount(stack.getAmount() - used);
@@ -272,24 +249,7 @@ public final class SocialEngine {
         }
     }
 
-    public void recordTrade(BVillager villager, int amount) {
-        if (villager == null) return;
-        String key = pairKey(villager.uuid(), villager.uuid());
-        friendship.merge(key, Math.max(0, amount), Integer::sum);
-    }
-
-    private String pairKey(String a, String b) {
-        return a.compareTo(b) < 0 ? a + ":" + b : b + ":" + a;
-    }
-
     private void endTrade(BVillager bv) {
-        bv.state(VillagerState.IDLE);
-        engaged.remove(bv.uuid());
-        if (BV.villagers() != null) BV.villagers().updateDisplayName(bv);
-    }
-
-    /** 结束攀谈：恢复头顶名称显示与状态。 */
-    private void endChat(BVillager bv) {
         bv.state(VillagerState.IDLE);
         engaged.remove(bv.uuid());
         if (BV.villagers() != null) {
@@ -297,93 +257,290 @@ public final class SocialEngine {
         }
     }
 
-    /** 释放占位（村民卸载时调用）。 */
+    private void endChat(BVillager bv) {
+        if (bv.state() == VillagerState.SOCIALIZING) {
+            bv.state(VillagerState.IDLE);
+        }
+        engaged.remove(bv.uuid());
+        clearDisplays(bv.uuid());
+        if (BV.villagers() != null) {
+            BV.villagers().updateDisplayName(bv);
+        }
+    }
+
+    /** 释放占位和该村民拥有的展示实体（区块卸载、死亡时调用）。 */
     public void release(String uuid) {
+        ChatSession session = chatSessions.get(uuid);
+        if (session != null) {
+            finishSession(session);
+        }
         engaged.remove(uuid);
-        friendship.keySet().removeIf(key -> key.startsWith(uuid + ":") || key.endsWith(":" + uuid));
-        breedingCooldown.keySet().removeIf(key -> key.startsWith(uuid + ":") || key.endsWith(":" + uuid));
+        clearDisplays(uuid);
     }
 
-    /** 双方面朝对方（贴合原版村民 gossip 面对面）。 */
     private float yawTowards(Location from, Location to) {
-        double dx = to.getX() - from.getX();
-        double dz = to.getZ() - from.getZ();
-        return (float) Math.toDegrees(Math.atan2(-dx, dz));
+        return (float) Math.toDegrees(Math.atan2(-(to.getX() - from.getX()), to.getZ() - from.getZ()));
     }
 
-    // ==================== 攀谈内容生成（异步 AI + i18n 回退） ====================
-
-    private void requestChatContent(BVillager a, BVillager b) {
+    private void requestChatContent(ChatSession session, BVillager speaker, BVillager partner) {
+        if (!isSessionActive(session)) {
+            finishSession(session);
+            return;
+        }
         String system = BV.messages().raw("ai-prompt.social-chat-system");
         String user = BV.messages().raw("ai-prompt.social-chat-user")
-                .replace("{name}", a.name())
-                .replace("{profession}", a.profession().id())
-                .replace("{partner}", b.name())
-                .replace("{partner-profession}", b.profession().id());
-        AIContext ctx = new AIContext(a.uuid(), a.name(), a.profession().id(), "social", system, user);
-        BV.ai().decide(ctx)
-                .thenAccept(result -> applyChatLabel(a, b, result))
-                .exceptionally(ex -> {
-                    applyChatLabel(a, b, null);
-                    return null;
-                });
+                .replace("{name}", speaker.name())
+                .replace("{profession}", speaker.profession().id())
+                .replace("{partner}", partner.name())
+                .replace("{partner-profession}", partner.profession().id());
+        AIContext context = new AIContext(speaker.uuid(), speaker.name(), speaker.profession().id(), "social", system, user);
+        BV.ai().decide(context)
+                .handle((result, error) -> error == null ? result : null)
+                .thenAccept(result -> applyChatLine(session, speaker, partner, result));
     }
 
-    private void applyChatLabel(BVillager a, BVillager b, AIResult result) {
-        String line = extractLine(result);
-        String ack = fallbackLine(b);
-        // 在各自实体区域线程写头顶标签（customName 临时替换为攀谈内容）
-        // 仅当村民仍处于攀谈状态时显示（避免 AI 延迟返回时攀谈已结束导致标签残留）
-        if (a.state() == VillagerState.SOCIALIZING) {
-            LivingEntity aEnt = a.entity();
-            if (aEnt != null) {
-                BV.scheduler().runForEntity(aEnt, () -> showLabel(aEnt, line), null);
-            }
+    private void applyChatLine(ChatSession session, BVillager speaker, BVillager partner, AIResult result) {
+        if (!isSessionActive(session)) {
+            finishSession(session);
+            return;
         }
-        if (b.state() == VillagerState.SOCIALIZING) {
-            LivingEntity bEnt = b.entity();
-            if (bEnt != null) {
-                BV.scheduler().runForEntity(bEnt, () -> showLabel(bEnt, ack), null);
-            }
+        String line = ensurePartnerName(extractLine(result, partner), partner.name());
+        LivingEntity speakerEntity = speaker.entity();
+        if (speakerEntity == null || !speakerEntity.isValid()) {
+            finishSession(session);
+            return;
         }
+        BV.scheduler().runForEntity(speakerEntity, () -> {
+            if (!isSessionActive(session)) {
+                finishSession(session);
+                return;
+            }
+            showChatDisplay(speaker.uuid(), speakerEntity, line);
+            BV.scheduler().runAtRegionDelayed(speakerEntity.getLocation(), () -> {
+                if (isSessionActive(session)) {
+                    requestChatContent(session, partner, speaker);
+                } else {
+                    finishSession(session);
+                }
+            }, replyIntervalTicks());
+        }, () -> finishSession(session));
     }
 
-    /** 提取 AI 返回的攀谈内容；失败/降级时回退 i18n 模板。 */
-    private String extractLine(AIResult result) {
+    private boolean isSessionActive(ChatSession session) {
+        if (shutdown || System.currentTimeMillis() >= session.deadlineMillis()
+                || chatSessions.get(session.first().uuid()) != session
+                || chatSessions.get(session.second().uuid()) != session
+                || isEmergencyState(session.first()) || isEmergencyState(session.second())) {
+            return false;
+        }
+        LivingEntity first = session.first().entity();
+        LivingEntity second = session.second().entity();
+        return first != null && first.isValid() && !first.isDead()
+                && second != null && second.isValid() && !second.isDead();
+    }
+
+    private boolean isEmergencyState(BVillager villager) {
+        return villager.state() == VillagerState.COMBAT || villager.state() == VillagerState.FLEEING;
+    }
+
+    private void finishSession(ChatSession session) {
+        if (!chatSessions.remove(session.first().uuid(), session)) {
+            return;
+        }
+        chatSessions.remove(session.second().uuid(), session);
+        finishVillager(session.first());
+        finishVillager(session.second());
+    }
+
+    private void finishVillager(BVillager villager) {
+        LivingEntity entity = villager.entity();
+        if (shutdown || entity == null || !entity.isValid()) {
+            endChat(villager);
+            return;
+        }
+        BV.scheduler().runForEntity(entity, () -> endChat(villager), () -> {
+            engaged.remove(villager.uuid());
+            clearDisplays(villager.uuid());
+        });
+    }
+
+    private void releasePair(String first, String second) {
+        engaged.remove(first);
+        engaged.remove(second);
+    }
+
+    private String extractLine(AIResult result, BVillager partner) {
         if (result != null && result.isUsable()) {
             return sanitize(result.text());
         }
-        return fallbackLine(null);
+        return fallbackLine(partner);
     }
 
-    /** 从 i18n 模板随机抽取一句攀谈内容（用户规则：禁止硬编码）。 */
-    private String fallbackLine(BVillager bv) {
+    private String ensurePartnerName(String line, String partnerName) {
+        return line.contains(partnerName) ? line : partnerName + line;
+    }
+
+    private String fallbackLine(BVillager partner) {
         List<String> lines = BV.messages().rawList("social.chat-lines");
-        if (lines.isEmpty()) {
-            return BV.messages().raw("social.chat-default");
-        }
-        String tpl = lines.get(ThreadLocalRandom.current().nextInt(lines.size()));
-        String prof = bv != null ? BV.messages().raw("professions." + bv.profession().id()) : "";
-        return tpl.replace("{profession}", prof);
+        String template = lines.isEmpty()
+                ? BV.messages().raw("social.chat-default")
+                : lines.get(ThreadLocalRandom.current().nextInt(lines.size()));
+        String profession = partner == null ? "" : BV.messages().raw("professions." + partner.profession().id());
+        String name = partner == null ? "" : partner.name();
+        return template.replace("{profession}", profession).replace("{name}", name);
     }
 
     private String sanitize(String raw) {
-        String s = raw.trim().replaceAll("[\"'`\n\r]", "");
-        if (s.length() > MAX_CHAT_LEN) {
-            s = s.substring(0, MAX_CHAT_LEN);
+        String value = raw == null ? "" : raw.trim().replaceAll("[\"'`\\n\\r]", "");
+        int maxLength = BV.config().raw().getInt("social.chat-max-length");
+        if (value.length() > maxLength) {
+            value = value.substring(0, maxLength);
         }
-        return s.isBlank() ? BV.messages().raw("social.chat-default") : s;
+        return value.isBlank() ? BV.messages().raw("social.chat-default") : value;
     }
 
-    /** 在实体头顶显示攀谈标签（临时替换 customName）。 */
-    private void showLabel(LivingEntity ent, String text) {
-        if (ent == null || ent.isDead()) {
+    private void showChatDisplay(String ownerUuid, LivingEntity owner, String text) {
+        showChatDisplay(ownerUuid, owner, text, chatBubbleDurationTicks());
+    }
+
+    private void showChatDisplay(String ownerUuid, LivingEntity owner, String text, long durationTicks) {
+        clearDisplays(ownerUuid);
+        if (bubbleDisabled() || owner.isDead()) {
             return;
         }
-        // 攀谈标签格式经 i18n 模板，避免硬编码颜色码（用户规则：禁止硬编码可见文本）
-        Component label = MessageService.deserialize(
-                BV.messages().raw("social.chat-label-format").replace("{text}", text));
-        ent.customName(label);
-        ent.setCustomNameVisible(true);
+        Component component = MessageService.deserialize(BV.messages().raw("social.chat-bubble-format").replace("{text}", text));
+        TextDisplay display = owner.getWorld().spawn(owner.getLocation(), TextDisplay.class, spawned -> {
+            spawned.text(component);
+            spawned.setBillboard(Display.Billboard.CENTER);
+            spawned.setSeeThrough(true);
+            spawned.setShadowed(true);
+            spawned.setDefaultBackground(false);
+            var transformation = spawned.getTransformation();
+            transformation.getTranslation().set(0F, (float) (owner.getHeight() + bubbleHeight()), 0F);
+            spawned.setTransformation(transformation);
+        });
+        owner.addPassenger(display);
+        trackDisplay(ownerUuid, display);
+        scheduleClear(ownerUuid, owner, List.of(display), durationTicks);
+    }
+
+    private void showTradeDisplay(String ownerUuid, LivingEntity owner, List<ItemStack> received) {
+        clearDisplays(ownerUuid);
+        if (bubbleDisabled() || owner.isDead()) {
+            return;
+        }
+        List<ItemStack> items = received.stream()
+                .filter(item -> item != null && !item.getType().isAir())
+                .map(ItemStack::clone)
+                .toList();
+        if (items.isEmpty()) {
+            showChatDisplay(ownerUuid, owner, BV.messages().raw("social.trade-fallback"), tradeBubbleDurationTicks());
+            return;
+        }
+        for (int index = 0; index < items.size(); index++) {
+            ItemStack item = items.get(index);
+            double offset = index * BV.config().raw().getDouble("social.bubble.item-spacing");
+            ItemDisplay display = owner.getWorld().spawn(bubbleLocation(owner, offset), ItemDisplay.class, spawned -> {
+                spawned.setItemStack(item);
+                spawned.setBillboard(Display.Billboard.CENTER);
+            });
+            trackDisplay(ownerUuid, display);
+        }
+        scheduleClear(ownerUuid, owner, List.copyOf(displays.getOrDefault(ownerUuid, List.of())), tradeBubbleDurationTicks());
+    }
+
+    private Location bubbleLocation(LivingEntity owner, double extraHeight) {
+        return owner.getLocation().add(0D, owner.getHeight() + bubbleHeight() + extraHeight, 0D);
+    }
+
+    private void trackDisplay(String ownerUuid, Entity display) {
+        displays.computeIfAbsent(ownerUuid, ignored -> new CopyOnWriteArrayList<>()).add(display);
+    }
+
+    private void scheduleClear(String ownerUuid, LivingEntity owner, List<Entity> expected, long durationTicks) {
+        BV.scheduler().runAtRegionDelayed(owner.getLocation(), () -> clearDisplays(ownerUuid, expected), durationTicks);
+    }
+
+    private void clearDisplays(String ownerUuid, List<Entity> expected) {
+        List<Entity> current = displays.get(ownerUuid);
+        if (!Objects.equals(current, expected)) {
+            return;
+        }
+        if (displays.remove(ownerUuid, current)) {
+            removeDisplays(current);
+        }
+    }
+
+    private void clearDisplays(String ownerUuid) {
+        removeDisplays(displays.remove(ownerUuid));
+    }
+
+    private void removeDisplays(List<Entity> ownerDisplays) {
+        if (ownerDisplays == null || ownerDisplays.isEmpty()) {
+            return;
+        }
+        for (Entity display : ownerDisplays) {
+            Runnable remove = () -> {
+                Entity vehicle = display.getVehicle();
+                if (vehicle != null) {
+                    vehicle.removePassenger(display);
+                }
+                if (display.isValid()) {
+                    display.remove();
+                }
+            };
+            BV.scheduler().runForEntity(display, remove, null);
+        }
+    }
+
+    public void shutdown() {
+        shutdown = true;
+        for (ChatSession session : Set.copyOf(chatSessions.values())) {
+            finishSession(session);
+        }
+        chatSessions.clear();
+        engaged.clear();
+        for (String ownerUuid : Set.copyOf(displays.keySet())) {
+            clearDisplays(ownerUuid);
+        }
+    }
+
+    private boolean bubbleDisabled() {
+        return !BV.config().raw().getBoolean("social.bubble.enabled", true);
+    }
+
+    private double bubbleHeight() {
+        return BV.config().raw().getDouble("social.bubble.height", 0.6D);
+    }
+
+    private long chatDurationMillis() {
+        long ticks = BV.config().raw().getLong("social.bubble.chat-duration-ticks", -1L);
+        if (ticks > 0L) {
+            return ticks * 50L;
+        }
+        return BV.config().raw().getLong("social.chat-duration-seconds", 5L) * 1000L;
+    }
+
+    private long replyIntervalTicks() {
+        return Math.max(1L, BV.config().raw().getLong("social.bubble.reply-interval-ticks", 40L));
+    }
+
+    private long chatBubbleDurationTicks() {
+        return Math.max(1L, BV.config().raw().getLong("social.bubble.chat-bubble-duration-ticks", 35L));
+    }
+
+    private long chatCooldownMillis() {
+        return BV.config().raw().getLong("social.chat-cooldown-seconds", 30L) * 1000L;
+    }
+
+    private long tradeBubbleDurationTicks() {
+        return BV.config().raw().getLong("social.bubble.trade-duration-ticks", 60L);
+    }
+
+    private double tradeChance() {
+        return BV.config().raw().getDouble("social.trade-chance", 0.35D);
+    }
+
+    private record ChatSession(BVillager first, BVillager second, long deadlineMillis) {
     }
 }

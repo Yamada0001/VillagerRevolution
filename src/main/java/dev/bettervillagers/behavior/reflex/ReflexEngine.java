@@ -1,6 +1,5 @@
 package dev.bettervillagers.behavior.reflex;
 
-import dev.bettervillagers.BV;
 import dev.bettervillagers.behavior.MovementHelper;
 import dev.bettervillagers.profession.Profession;
 import dev.bettervillagers.villager.BVillager;
@@ -36,9 +35,9 @@ public final class ReflexEngine {
         this.threatDetector = threatDetector;
     }
 
-    /**
-     * 快速战斗 tick（每 0.5s 由 BehaviorEngine.tickCombat 调用）。
-     * 战斗职业追击攻击；非战斗职业逃离求援。
+    /*
+      快速战斗 tick（每 0.5s 由 BehaviorEngine.tickCombat 调用）。
+      战斗职业追击攻击；非战斗职业逃离求援。
      */
     /** 非战斗职业仅在此距离内（格）逃跑；远处怪物忽略。 */
     private static final double CIVILIAN_FLEE_RANGE_SQ = 36.0; // 6 格
@@ -178,7 +177,7 @@ public final class ReflexEngine {
     }
 
     /** 护卫国王：赶赴威胁位置并攻击。 */
-    public void defendKing(BVillager guard, Location kingLoc, LivingEntity threat) {
+    public void defendKing(BVillager guard, LivingEntity threat) {
         LivingEntity self = guard.entity();
         if (self == null || threat == null || !isCombatant(guard.profession())) {
             return;

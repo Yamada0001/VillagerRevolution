@@ -3,39 +3,24 @@ package dev.bettervillagers.building;
 import org.bukkit.Material;
 
 /**
- * 场地只读快照（区域线程采集 → 异步线程分析）。
- * <p>
- * 不持有任何 World/Block 引用，保证跨线程安全；世界生成逻辑不受影响。
+ * Immutable terrain sample captured on a region thread and analyzed off-thread.
  */
-public final class TerrainSnapshot {
+final class TerrainSnapshot {
 
-    private final String worldName;
     private final int originX;
-    private final int originY;
     private final int originZ;
     private final int sizeX;
     private final int sizeZ;
-    /** 列地表高度（相对 origin，按 x + z * sizeX 索引）。 */
     private final int[] surfaceY;
-    /** 列顶部方块类型。 */
     private final Material[] surfaceMat;
-    /** 列上方 1~3 格阻挡（空气=false）。 */
     private final boolean[] blocked;
     private final long seed;
     private final String biomeKey;
 
-    public TerrainSnapshot(String worldName, int originX, int originY, int originZ,
-                           int sizeX, int sizeZ, int[] surfaceY, Material[] surfaceMat,
-                           boolean[] blocked, long seed) {
-        this(worldName, originX, originY, originZ, sizeX, sizeZ, surfaceY, surfaceMat, blocked, seed, "plains");
-    }
-
-    public TerrainSnapshot(String worldName, int originX, int originY, int originZ,
-                           int sizeX, int sizeZ, int[] surfaceY, Material[] surfaceMat,
-                           boolean[] blocked, long seed, String biomeKey) {
-        this.worldName = worldName;
+    TerrainSnapshot(int originX, int originZ, int sizeX, int sizeZ,
+                    int[] surfaceY, Material[] surfaceMat, boolean[] blocked,
+                    long seed, String biomeKey) {
         this.originX = originX;
-        this.originY = originY;
         this.originZ = originZ;
         this.sizeX = sizeX;
         this.sizeZ = sizeZ;
@@ -46,59 +31,51 @@ public final class TerrainSnapshot {
         this.biomeKey = biomeKey == null ? "plains" : biomeKey;
     }
 
-    public String biomeKey() {
+    String biomeKey() {
         return biomeKey;
     }
 
-    public String worldName() {
-        return worldName;
-    }
-
-    public int originX() {
+    int originX() {
         return originX;
     }
 
-    public int originY() {
-        return originY;
-    }
-
-    public int originZ() {
+    int originZ() {
         return originZ;
     }
 
-    public int sizeX() {
+    int sizeX() {
         return sizeX;
     }
 
-    public int sizeZ() {
+    int sizeZ() {
         return sizeZ;
     }
 
-    public long seed() {
+    long seed() {
         return seed;
     }
 
-    public int index(int lx, int lz) {
-        return lx + lz * sizeX;
-    }
-
-    public int surfaceY(int lx, int lz) {
+    int surfaceY(int lx, int lz) {
         return surfaceY[index(lx, lz)];
     }
 
-    public Material surfaceMat(int lx, int lz) {
+    Material surfaceMat(int lx, int lz) {
         return surfaceMat[index(lx, lz)];
     }
 
-    public boolean blocked(int lx, int lz) {
+    boolean blocked(int lx, int lz) {
         return blocked[index(lx, lz)];
     }
 
-    public int worldX(int lx) {
+    int worldX(int lx) {
         return originX + lx;
     }
 
-    public int worldZ(int lz) {
+    int worldZ(int lz) {
         return originZ + lz;
+    }
+
+    private int index(int lx, int lz) {
+        return lx + lz * sizeX;
     }
 }

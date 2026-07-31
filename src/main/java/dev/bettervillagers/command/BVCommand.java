@@ -2,7 +2,9 @@ package dev.bettervillagers.command;
 
 import dev.bettervillagers.BV;
 import dev.bettervillagers.ai.AIContext;
+import dev.bettervillagers.gui.BetterVillagersGui;
 import dev.bettervillagers.profession.Profession;
+import dev.bettervillagers.redstone.RegionSelectionListener;
 import dev.bettervillagers.redstone.RegionVisualizer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -11,6 +13,9 @@ import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Villager;
+import org.bukkit.inventory.ItemStack;
+import org.jetbrains.annotations.NotNull;
+import org.jspecify.annotations.NonNull;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,31 +29,63 @@ import java.util.Optional;
 public final class BVCommand implements CommandExecutor, TabCompleter {
 
     private final RegionVisualizer visualizer = new RegionVisualizer();
+    private final RegionSelectionListener regionSelection;
+    private BetterVillagersGui gui;
+
+    public BVCommand(RegionSelectionListener regionSelection) {
+        this.regionSelection = regionSelection;
+    }
+
+    public void gui(BetterVillagersGui gui) {
+        this.gui = gui;
+    }
 
     @Override
-    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+    public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command,
+                             @NotNull String label, @NotNull String @NonNull [] args) {
+        execute(sender, args);
+        return true;
+    }
+
+    public void execute(Player player, String[] args) {
+        execute((CommandSender) player, args);
+    }
+
+    private void execute(CommandSender sender, String[] args) {
         if (args.length == 0) {
-            sendHelp(sender);
-            return true;
+            if (sender instanceof Player player) {
+                gui.openMain(player);
+            } else {
+                BV.messages().send(sender, "player-only");
+            }
+            return;
         }
         String subcommand = args[0].toLowerCase();
         if (requiresAdmin(subcommand) && !sender.hasPermission("bettervillagers.admin")) {
             BV.messages().send(sender, "no-permission");
-            return true;
+            return;
         }
         switch (subcommand) {
             case "help" -> sendHelp(sender);
+            case "gui" -> {
+                if (sender instanceof Player player) {
+                    gui.openMain(player);
+                } else {
+                    BV.messages().send(sender, "player-only");
+                }
+            }
             case "reload" -> reload(sender);
             case "debug" -> BV.debug().sendDebug(sender);
             case "profession" -> profession(sender, args);
             case "region" -> region(sender, args);
+            case "yes" -> regionConfirm(sender);
+            case "rename" -> regionRename(sender, args);
             case "village" -> village(sender, args);
             case "ai" -> ai(sender, args);
             case "sel" -> select(sender);
             case "tp" -> teleport(sender, args);
             default -> BV.messages().send(sender, "unknown-command");
         }
-        return true;
     }
 
     private boolean requiresAdmin(String subcommand) {
@@ -65,6 +102,8 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
         line(sender, "/bv debug", BV.messages().raw("help-debug"));
         line(sender, "/bv profession " + BV.messages().raw("usage-profession"), BV.messages().raw("help-profession"));
         line(sender, "/bv region create|delete|list|info|viz", BV.messages().raw("help-region"));
+        line(sender, "/bv yes", BV.messages().raw("help-region-confirm"));
+        line(sender, "/bv rename <当前名字> <新名字>", BV.messages().raw("help-region-rename"));
         line(sender, "/bv village info|king|stats", BV.messages().raw("help-village"));
         line(sender, "/bv ai toggle|reset|test|chat " + BV.messages().raw("usage-prompt"), BV.messages().raw("help-ai"));
     }
@@ -127,7 +166,7 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
         BV.professions().load();
         // 修复问题8：reload 时重建 AI provider 链，使 provider/api-key/endpoint 立即生效
         if (BV.ai() != null) {
-            BV.ai().reconfigure(BV.config().ai(), BV.config().circuitBreaker());
+            BV.ai().reconfigure(BV.config().ai());
         }
         int count = BV.villagers() != null ? BV.villagers().count() : 0;
         BV.messages().send(sender, "reloaded", "count", String.valueOf(count));
@@ -159,7 +198,7 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
             return;
         }
         switch (args[1].toLowerCase()) {
-            case "create" -> regionCreate(sender, args);
+            case "create" -> regionCreate(sender);
             case "delete" -> regionDelete(sender, args);
             case "list" -> regionList(sender);
             case "info" -> regionInfo(sender, args);
@@ -168,30 +207,85 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
         }
     }
 
-    private void regionCreate(CommandSender sender, String[] args) {
-        if (!(sender instanceof Player p)) {
+    private void regionCreate(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
             BV.messages().send(sender, "player-only");
             return;
         }
-        if (!p.hasPermission("bettervillagers.redstone.create")) {
+        if (!player.hasPermission("bettervillagers.redstone.create")) {
             BV.messages().send(sender, "no-permission");
             return;
         }
-        String name = args.length > 2 ? args[2] : ("region_" + System.currentTimeMillis() % 10000);
-        var loc = p.getLocation();
-        // 区域范围参数（原硬编码，规范：魔法值提取为具名局部变量）
-        final int half = 16;            // 区域半径（格）
-        final int yDown = 4;            // 向下延伸（格）
-        final int yUp = 8;              // 向上延伸（格）
-        boolean ok = BV.regions().create(name, loc.getWorld().getName(),
-                loc.getBlockX() - half, loc.getBlockY() - yDown, loc.getBlockZ() - half,
-                loc.getBlockX() + half, loc.getBlockY() + yUp, loc.getBlockZ() + half,
-                p.getName());
-        if (ok) {
-            BV.messages().send(sender, "region-created", "name", name);
-        } else {
-            BV.messages().send(sender, "region-exists", "name", name);
+        regionSelection.begin(player);
+    }
+
+    private void regionConfirm(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            BV.messages().send(sender, "player-only");
+            return;
         }
+        if (!player.hasPermission("bettervillagers.redstone.create")) {
+            BV.messages().send(sender, "no-permission");
+            return;
+        }
+        Optional<RegionSelectionListener.Selection> selection = regionSelection.takeSelection(player.getUniqueId());
+        if (selection.isEmpty()) {
+            BV.messages().send(player, "region-selection-incomplete");
+            return;
+        }
+        RegionSelectionListener.Selection points = selection.get();
+        String name = nextRegionName();
+        boolean created = BV.regions().create(name, points.first().getWorld().getName(),
+                points.first().getBlockX(), points.first().getBlockY(), points.first().getBlockZ(),
+                points.second().getBlockX(), points.second().getBlockY(), points.second().getBlockZ(), player.getName());
+        BV.messages().send(player, created ? "region-created" : "region-exists", "name", name);
+    }
+
+    private void regionRename(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player player)) {
+            BV.messages().send(sender, "player-only");
+            return;
+        }
+        String input = args.length > 1 ? String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length)) : "";
+        ProtectedRegionName rename = resolveRename(input);
+        if (rename == null) {
+            BV.messages().send(player, "region-rename-usage");
+            return;
+        }
+        boolean owner = BV.regions().findByName(rename.current())
+                .map(region -> player.getName().equalsIgnoreCase(region.owner())).orElse(false);
+        if (!owner && !player.hasPermission("bettervillagers.redstone.modify")) {
+            BV.messages().send(player, "no-permission");
+            return;
+        }
+        if (BV.regions().modify(rename.current(), rename.replacement(), null)) {
+            BV.messages().send(player, "region-renamed", "old", rename.current(), "new", rename.replacement());
+        } else {
+            BV.messages().send(player, "region-rename-failed", "name", rename.replacement());
+        }
+    }
+
+    private ProtectedRegionName resolveRename(String input) {
+        return BV.regions().all().stream()
+                .map(dev.bettervillagers.redstone.ProtectedRegion::name)
+                .filter(name -> input.length() > name.length() && input.regionMatches(true, 0, name, 0, name.length())
+                        && Character.isWhitespace(input.charAt(name.length())))
+                .max(java.util.Comparator.comparingInt(String::length))
+                .map(current -> new ProtectedRegionName(current, input.substring(current.length()).trim()))
+                .filter(rename -> !rename.replacement().isEmpty())
+                .orElse(null);
+    }
+
+    private String nextRegionName() {
+        int sequence = 1;
+        String name;
+        do {
+            name = "region_" + sequence++;
+        } while (BV.regions().findByName(name).isPresent());
+        return name;
+    }
+
+    private record ProtectedRegionName(String current, String replacement) {
     }
 
     private void regionDelete(CommandSender sender, String[] args) {
@@ -264,11 +358,12 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
                 : v.name();
         // 修复问题1：国王实时扫描解析（名字/同步 kingUuid）
         String kingName = BV.villages().resolveKingName(v.id());
+        String location = v.centerX() + "," + v.centerY() + "," + v.centerZ();
         switch (args.length < 2 ? "info" : args[1].toLowerCase()) {
             case "info" -> BV.messages().send(sender, "village-info",
                     "id", String.valueOf(v.id()), "name", vname,
                     "pop", String.valueOf(BV.villages().countVillagersInVillage(v.id())),
-                    "loc", v.centerX() + "," + v.centerY() + "," + v.centerZ(),
+                    "loc", location,
                     "king", kingName);
             case "king" -> {
                 // 先触发实时扫描同步 kingUuid
@@ -289,7 +384,7 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
                 int realPop = BV.villages().countVillagersInVillage(v.id());
                 BV.messages().send(sender, "village-info",
                     "id", String.valueOf(v.id()), "name", vname, "pop", String.valueOf(realPop),
-                    "loc", v.centerX() + "," + v.centerY() + "," + v.centerZ(),
+                    "loc", location,
                     "king", kingName);
             }
             case "verify" -> {
@@ -297,10 +392,10 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
                 BV.messages().send(sender, "village-verify-start");
                 BV.scheduler().runAsync(() -> {
                     var res = BV.villages().deduplicate();
-                    BV.scheduler().runAsync(() -> BV.messages().send(sender, "log.village-verify-done",
+                    sendAsync(sender, "village-verify-done",
                             "scanned", String.valueOf(res.scanned()),
                             "merged", String.valueOf(res.merged()),
-                            "flagged", String.valueOf(res.flagged())));
+                            "flagged", String.valueOf(res.flagged()));
                 });
             }
             default -> BV.messages().send(sender, "unknown-command");
@@ -343,57 +438,71 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
                 AIContext ctx = new AIContext("test-" + uuid, t.name(), t.professionId(),
                         "chat", system, prompt);
                 BV.ai().decide(ctx)
-                        .thenAccept(r -> BV.scheduler().runAsync(() -> {
+                        .thenAccept(r -> {
                             // 修复问题7：降级结果（非真实大模型回复）显示不可用，而非 "WORK"
                             if (r != null && r.isUsable()) {
-                                BV.messages().send(sender, "ai-test-response", "name", t.name(), "response", r.text());
+                                sendAsync(sender, "ai-test-response", "name", t.name(), "response", r.text());
                             } else {
-                                BV.messages().send(sender, "ai-unavailable");
+                                sendAsync(sender, "ai-unavailable");
                             }
-                        }))
-                        .exceptionally(ex -> {
-                            BV.scheduler().runAsync(() -> BV.messages().send(sender, "ai-unavailable"));
-                            return null;
-                        });
+                        })
+                        .exceptionally(ex -> handleAiFailure(sender, ex));
             }
             case "chat" -> {
                 // /bv ai chat <message>：注入本村真实事实，禁止模型编造
                 String message = args.length > 2 ? String.join(" ", java.util.Arrays.copyOfRange(args, 2, args.length)) : BV.messages().raw("ai-prompt.chat-default");
                 BV.messages().send(sender, "ai-test-prompt", "name", t.name());
                 VillageFacts facts = villageFactsFor(t);
+                String equipment = playerEquipmentFacts(p);
                 String system = BV.messages().raw("ai-prompt.chat-system")
                         .replace("{profession}", t.professionId())
                         .replace("{name}", t.name())
                         .replace("{village}", facts.villageName())
                         .replace("{king}", facts.kingName())
                         .replace("{pop}", facts.population())
+                        .replace("{equipment}", equipment)
                         .replace("{self}", t.name());
                 String user = BV.messages().raw("ai-prompt.chat-user")
                         .replace("{message}", message)
                         .replace("{name}", t.name())
                         .replace("{village}", facts.villageName())
                         .replace("{king}", facts.kingName())
-                        .replace("{pop}", facts.population());
+                        .replace("{pop}", facts.population())
+                        .replace("{equipment}", equipment);
                 AIContext ctx = new AIContext("chat-" + uuid, t.name(), t.professionId(),
                         "chat", system, user);
                 BV.ai().decide(ctx)
-                        .thenAccept(r -> BV.scheduler().runAsync(() -> {
+                        .thenAccept(r -> {
                             if (r != null && r.isUsable()) {
-                                BV.messages().send(sender, "ai-test-response", "name", t.name(), "response", r.text());
+                                sendAsync(sender, "ai-test-response", "name", t.name(), "response", r.text());
                             } else {
-                                BV.messages().send(sender, "ai-unavailable");
+                                sendAsync(sender, "ai-unavailable");
                             }
-                        }))
-                        .exceptionally(ex -> {
-                            BV.scheduler().runAsync(() -> BV.messages().send(sender, "ai-unavailable"));
-                            return null;
-                        });
+                        })
+                        .exceptionally(ex -> handleAiFailure(sender, ex));
             }
             default -> BV.messages().send(sender, "unknown-command");
         }
     }
 
     // ---- 工具 ----
+
+    /** 将异步工作结果投递回命令发送者所属的安全线程。 */
+    private void sendAsync(CommandSender sender, String key, String... pairs) {
+        if (sender instanceof Player player) {
+            BV.scheduler().runForEntity(player, () -> BV.messages().send(player, key, pairs), null);
+            return;
+        }
+        BV.scheduler().runGlobal(() -> BV.messages().send(sender, key, pairs));
+    }
+
+    private Void handleAiFailure(CommandSender sender, Throwable ex) {
+        if (BV.config().debugMode() && ex != null) {
+            BV.plugin().getLogger().warning("AI command failed: " + ex.getMessage());
+        }
+        sendAsync(sender, "ai-unavailable");
+        return null;
+    }
 
     private record BVillagerTarget(Villager villager, String name, String professionId, int villageId) {
     }
@@ -422,13 +531,38 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
         Optional<dev.bettervillagers.villager.BVillager> opt = BV.villagers() != null
                 ? BV.villagers().get(uuid) : Optional.empty();
         String name = opt.map(dev.bettervillagers.villager.BVillager::name).orElse(v.getName());
-        if (name == null || name.isBlank()) {
+        if (name.isBlank()) {
             name = "Villager";
         }
         String prof = opt.map(b -> b.profession() != null ? b.profession().id() : "civilian")
-                .orElse(v.getProfession().name().toLowerCase());
+                .orElse(v.getProfession().getKey().getKey().toLowerCase());
         int vid = opt.map(dev.bettervillagers.villager.BVillager::villageId).orElse(-1);
-        return new BVillagerTarget(v, name, prof == null || prof.isBlank() ? "civilian" : prof, vid);
+        return new BVillagerTarget(v, name, prof.isBlank() ? "civilian" : prof, vid);
+    }
+
+    private String playerEquipmentFacts(Player player) {
+        List<String> equipment = new ArrayList<>();
+        addEquipmentFact(equipment, "main-hand", player.getInventory().getItemInMainHand());
+        addEquipmentFact(equipment, "helmet", player.getInventory().getHelmet());
+        addEquipmentFact(equipment, "chestplate", player.getInventory().getChestplate());
+        addEquipmentFact(equipment, "leggings", player.getInventory().getLeggings());
+        addEquipmentFact(equipment, "boots", player.getInventory().getBoots());
+        return equipment.isEmpty() ? BV.messages().raw("ai-prompt.chat-equipment-empty") : String.join("; ", equipment);
+    }
+
+    private void addEquipmentFact(List<String> equipment, String slot, ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return;
+        }
+        net.kyori.adventure.text.Component displayName = item.hasItemMeta()
+                ? item.getItemMeta().displayName() : null;
+        String itemName = displayName == null ? item.getType().translationKey()
+                : net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                .serialize(displayName);
+        equipment.add(BV.messages().raw("ai-prompt.chat-equipment-entry")
+                .replace("{slot}", BV.messages().raw("ai-prompt.chat-equipment-slot." + slot))
+                .replace("{item}", itemName)
+                .replace("{amount}", String.valueOf(item.getAmount())));
     }
 
     private VillageFacts villageFactsFor(BVillagerTarget t) {
@@ -498,21 +632,42 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
     }
 
     @Override
-    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+    public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
+                                      @NotNull String alias, @NotNull String @NonNull [] args) {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
-            out.addAll(List.of("help", "reload", "debug", "profession", "region", "village", "ai"));
+            out.addAll(List.of("help", "gui", "sel", "region", "yes", "rename", "village"));
+            if (sender.hasPermission("bettervillagers.admin")) {
+                out.addAll(List.of("reload", "debug", "profession", "ai", "tp"));
+            }
         } else if (args.length == 2) {
             switch (args[0].toLowerCase()) {
                 case "profession" -> out.addAll(java.util.Arrays.stream(Profession.values()).map(Profession::id).toList());
-                case "region" -> out.addAll(List.of("create", "delete", "list", "info", "viz"));
-                case "village" -> out.addAll(List.of("info", "king", "stats"));
+                case "region" -> {
+                    out.addAll(List.of("list", "info", "viz"));
+                    if (sender.hasPermission("bettervillagers.redstone.create")) {
+                        out.add("create");
+                    }
+                    if (sender.hasPermission("bettervillagers.redstone.delete")) {
+                        out.add("delete");
+                    }
+                }
+                case "village" -> {
+                    out.addAll(List.of("info", "king", "stats"));
+                    if (sender.hasPermission("bettervillagers.admin")) {
+                        out.add("verify");
+                    }
+                }
                 case "ai" -> out.addAll(List.of("toggle", "reset", "test", "chat"));
                 default -> {
                 }
             }
+        } else if (args.length == 3 && args[0].equalsIgnoreCase("region")
+                && List.of("delete", "info", "viz", "visualize").contains(args[1].toLowerCase())) {
+            out.addAll(BV.regions().all().stream()
+                    .map(dev.bettervillagers.redstone.ProtectedRegion::name).toList());
         }
         String prefix = args[args.length - 1].toLowerCase();
-        return out.stream().filter(s -> s.startsWith(prefix)).toList();
+        return out.stream().filter(s -> s.toLowerCase().startsWith(prefix)).toList();
     }
 }

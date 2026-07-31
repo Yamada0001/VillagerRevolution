@@ -3,7 +3,6 @@ package dev.bettervillagers.village;
 import dev.bettervillagers.BV;
 import dev.bettervillagers.ai.AIContext;
 import dev.bettervillagers.behavior.strategic.StrategicAI;
-import org.bukkit.Bukkit;
 
 import java.util.HashMap;
 import java.util.List;
@@ -111,40 +110,44 @@ public final class VillageManager {
                 .thenAccept(r -> {
                     // 只有 AI 真正成功（非降级、文本可用）才使用 AI 名字
                     if (r.isUsable()) {
-                        String name = sanitizeName(r.text(), village);
+                        String name = sanitizeName(r.text(), biomeFinal);
                         setName(village.id(), name);
                     }
                 })
-                .exceptionally(ex -> null);
+                .exceptionally(ignored -> null);
     }
 
     /** 清洗 AI 返回的名字；AI 不可用时用规则引擎兜底（村庄必须有名字）。 */
-    private String sanitizeName(String raw, Village village) {
+    private String sanitizeName(String raw, String biome) {
         if (raw == null || raw.isBlank()) {
-            return ruleBasedName(village, null);
+            return ruleBasedName(biome);
         }
         String name = raw.trim()
                 .replaceAll("[\"'`]", "")
-                .replaceAll("[\\p{Punct}]", "")
+                .replaceAll("\\p{Punct}", "")
                 .replaceAll("\\s+", " ")
                 .trim();
         // 过滤 AI 协议关键词
         if (name.matches("(?i)^(WORK|FLEE|ATTACK|PATROL|REST|TRADE|HOLD|ACCEPT|REJECT|IDLE)$")) {
-            return ruleBasedName(village, null);
+            return ruleBasedName(biome);
         }
         if (name.isBlank() || name.length() > 16) {
-            name = name.length() > 16 ? name.substring(0, 16) : ruleBasedName(village, null);
+            name = name.length() > 16 ? name.substring(0, 16) : ruleBasedName(biome);
         }
-        return name.isBlank() ? ruleBasedName(village, null) : name;
+        return name.isBlank() ? ruleBasedName(biome) : name;
     }
 
     /** 规则引擎兜底命名（AI 不可用时，名字库从 lang 文件加载，规范 6.2 / i18n）。 */
-    private String ruleBasedName(Village v, String biome) {
+    private String ruleBasedName(String biome) {
         List<String> prefixes = BV.messages().rawList("names.village-prefix");
         List<String> suffixes = BV.messages().rawList("names.village-suffix");
-        // 兜底：lang 文件未加载时使用最小默认集
-        if (prefixes.isEmpty()) prefixes = List.of("晨曦", "暮色");
-        if (suffixes.isEmpty()) suffixes = List.of("镇", "村");
+        // 兜底也走语言资源，避免再次引入硬编码文本
+        if (prefixes.isEmpty()) {
+            prefixes = BV.messages().rawList("names.village-prefix-fallback");
+        }
+        if (suffixes.isEmpty()) {
+            suffixes = BV.messages().rawList("names.village-suffix-fallback");
+        }
         String prefix = biome != null && !biome.isBlank()
                 ? biome.split(" ")[0]
                 : prefixes.get(ThreadLocalRandom.current().nextInt(prefixes.size()));
@@ -175,7 +178,9 @@ public final class VillageManager {
         if (BV.villagers() != null) {
             for (var bv : BV.villagers().all()) {
                 var ent = bv.entity();
-                if (ent == null) continue;
+                if (ent == null) {
+                    continue;
+                }
                 var loc = ent.getLocation();
                 if (v.covers(loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ())) {
                     count++;
@@ -364,13 +369,40 @@ public final class VillageManager {
         return new DedupResult(snapshot.size(), merged, flagged);
     }
 
-    /** 把 from 并入 to：迁移村民、累加人口、删除 from。 */
+    /** 把 from 并入 to：先持久化成功，再提交内存态与相关缓存变更。 */
     private void mergeInto(int fromId, int toId) {
         Village from = villages.get(fromId);
         Village to = villages.get(toId);
         if (from == null || to == null) {
             return;
         }
+        int newPop = from.population() + to.population();
+        Village merged = new Village(to.id(), to.world(), to.centerX(), to.centerY(), to.centerZ(),
+                Math.max(from.radius(), to.radius()),
+                to.kingUuid() != null ? to.kingUuid() : from.kingUuid(),
+                newPop,
+                to.name() != null ? to.name() : from.name());
+        BV.scheduler().runAsync(() -> {
+            try {
+                BV.storage().villages().updatePopulation(toId, newPop);
+                if (to.kingUuid() == null && from.kingUuid() != null) {
+                    BV.storage().villages().updateKing(toId, from.kingUuid());
+                }
+                BV.storage().villages().delete(fromId);
+                applyMergedVillageState(fromId, toId, merged);
+                BV.plugin().getLogger().info(BV.messages().raw("log.village-merged")
+                        .replace("{from}", String.valueOf(fromId))
+                        .replace("{to}", String.valueOf(toId)));
+            } catch (RuntimeException e) {
+                BV.plugin().getLogger().warning(BV.messages().raw("errors.village-merge")
+                        .replace("{from}", String.valueOf(fromId))
+                        .replace("{to}", String.valueOf(toId))
+                        .replace("{error}", e.getMessage()));
+            }
+        });
+    }
+
+    private void applyMergedVillageState(int fromId, int toId, Village merged) {
         if (BV.villagers() != null) {
             for (var bv : BV.villagers().all()) {
                 if (bv.villageId() == fromId) {
@@ -378,12 +410,7 @@ public final class VillageManager {
                 }
             }
         }
-        int newPop = from.population() + to.population();
-        villages.put(toId, new Village(to.id(), to.world(), to.centerX(), to.centerY(), to.centerZ(),
-                Math.max(from.radius(), to.radius()),
-                to.kingUuid() != null ? to.kingUuid() : from.kingUuid(),
-                newPop,
-                to.name() != null ? to.name() : from.name()));
+        villages.put(toId, merged);
         villages.remove(fromId);
         // D4 修复：村庄合并后移除废弃村庄的巡逻路线缓存，并重建目标村庄路线（半径可能变更）
         if (BV.patrolRouter() != null) {
@@ -392,74 +419,17 @@ public final class VillageManager {
         }
         // 规范 4.x：清理废弃村庄在各子系统的缓存，避免 stale 条目残留与内存增长
         StrategicAI.clearVillage(fromId);
-        if (BV.building() != null && BV.building().cache() != null) {
-            BV.building().cache().clear(fromId);
+        if (BV.building() != null) {
+            BV.building().clearVillage(fromId);
         }
-        if (BV.diplomacy() != null) {
-            BV.diplomacy().removeVillage(fromId);
-        }
-        BV.scheduler().runAsync(() -> {
-            try {
-                BV.storage().villages().updatePopulation(toId, newPop);
-                if (to.kingUuid() == null && from.kingUuid() != null) {
-                    BV.storage().villages().updateKing(toId, from.kingUuid());
-                }
-                BV.storage().villages().delete(fromId);
-            } catch (RuntimeException e) {
-                BV.plugin().getLogger().warning(BV.messages().raw("errors.village-merge")
-                        .replace("{from}", String.valueOf(fromId))
-                        .replace("{to}", String.valueOf(toId))
-                        .replace("{error}", e.getMessage()));
-            }
-        });
-        BV.plugin().getLogger().info(BV.messages().raw("log.village-merged")
-                .replace("{from}", String.valueOf(fromId))
-                .replace("{to}", String.valueOf(toId)));
     }
 
-    /**
-     * 基于 Bukkit 原生 {@link org.bukkit.World#getNearbyEntities} 查询村庄范围内所有村民实体。
-     * <p>
-     * 这是权威实体查询接口（修复问题3：用原生游戏接口替代自定义遍历）。
-     * 必须在区域线程/主线程调用；异步调用方应通过 {@link #countVillagersViaGameAsync} 调度。
+    /*
+      基于 Bukkit 原生 {@link org.bukkit.World#getNearbyEntities} 查询村庄范围内所有村民实体。
+      <p>
+      这是权威实体查询接口（修复问题3：用原生游戏接口替代自定义遍历）。
      */
-    public int countVillagersViaGame(Village village) {
-        if (village == null) {
-            return 0;
-        }
-        org.bukkit.World world = org.bukkit.Bukkit.getWorld(village.world());
-        if (world == null) {
-            return 0;
-        }
-        org.bukkit.Location center = new org.bukkit.Location(world,
-                village.centerX(), village.centerY(), village.centerZ());
-        double r = village.radius();
-        return (int) world.getNearbyEntities(center, r, r, r,
-                e -> e instanceof org.bukkit.entity.Villager).size();
-    }
-
-    /** 异步调度到村庄中心所在区域线程，用原生接口统计村民数量。 */
-    public java.util.concurrent.CompletableFuture<Integer> countVillagersViaGameAsync(int villageId) {
-        Village v = villages.get(villageId);
-        if (v == null) {
-            return java.util.concurrent.CompletableFuture.completedFuture(0);
-        }
-        org.bukkit.World world = org.bukkit.Bukkit.getWorld(v.world());
-        if (world == null) {
-            return java.util.concurrent.CompletableFuture.completedFuture(0);
-        }
-        java.util.concurrent.CompletableFuture<Integer> fut = new java.util.concurrent.CompletableFuture<>();
-        org.bukkit.Location center = new org.bukkit.Location(world, v.centerX(), v.centerY(), v.centerZ());
-        BV.scheduler().runAtRegion(center, () -> {
-            try {
-                fut.complete(countVillagersViaGame(v));
-            } catch (Throwable t) {
-                fut.completeExceptionally(t);
-            }
-        });
-        return fut;
-    }
-
+    /* 异步调度到村庄中心所在区域线程，用原生接口统计村民数量。 */
     // ==================== 自测（修复验证） ====================
     // 说明：原 selfTestDeduplication() / deduplicateInMemory() 为调试用死代码（含硬编码中文测试串、
     // 与正式 deduplicate() 逻辑重复）。已删除，去重逻辑统一由 deduplicate() 承担；测试应移至单元测试目录。

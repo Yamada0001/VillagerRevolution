@@ -79,14 +79,6 @@ public final class ConfigManager {
         return config.getInt("performance.strategic-interval", 60);
     }
 
-    public int maxBuildTasksPerVillagePeriod() {
-        return Math.max(0, config.getInt("building.max-tasks-per-village-period", 8));
-    }
-
-    public int buildTaskPeriodDays() {
-        return Math.max(1, config.getInt("building.task-period-days", 1));
-    }
-
     public int villageEntryRangeExtra() {
         return Math.max(0, config.getInt("village.entry-range-extra", 10));
     }

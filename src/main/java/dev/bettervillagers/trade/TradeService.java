@@ -3,8 +3,6 @@ package dev.bettervillagers.trade;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import dev.bettervillagers.BV;
-import dev.bettervillagers.ai.AIContext;
-import dev.bettervillagers.ai.AIResult;
 import dev.bettervillagers.profession.Profession;
 import dev.bettervillagers.villager.BVillager;
 import org.bukkit.Material;
@@ -51,60 +49,6 @@ public final class TradeService {
         return price;
     }
 
-    /** 生成一次交易（返回建议售价堆叠），并令村民 AI 判断是否公平。 */
-    public void offerTrade(BVillager merchant, Material goods, int quantity) {
-        // 生电保护区内完全关闭 AI 交易（规范 5.x）
-        org.bukkit.entity.Villager entity = merchant.entity();
-        if (entity != null && BV.regions() != null && BV.regions().isProtected(entity.getLocation())) {
-            return;
-        }
-        double price = priceOf(goods, 1, quantity);
-        ItemStack stack = new ItemStack(goods, Math.min(quantity, goods.getMaxStackSize()));
-        // AI 公平性判断（异步，Prompt 经 i18n 模板）
-        String system = BV.messages().raw("ai-prompt.merchant-system");
-        String user = BV.messages().raw("ai-prompt.merchant-user")
-                .replace("{goods}", goods.toString())
-                .replace("{quantity}", String.valueOf(quantity))
-                .replace("{price}", String.format("%.2f", price));
-        AIContext ctx = new AIContext(merchant.uuid(), merchant.name(), "merchant", "trade", system, user);
-        BV.ai().decide(ctx).thenAccept(r -> applyTrade(merchant, stack, r))
-                .exceptionally(ex -> {
-                    BV.plugin().getLogger().warning(BV.messages().raw("log.trade-error")
-                            .replace("{uuid}", String.valueOf(merchant.uuid())).replace("{error}", String.valueOf(ex)));
-                    return null;
-                });
-    }
-
-    private void applyTrade(BVillager merchant, ItemStack stack, AIResult result) {
-        boolean accept = result.success() && result.text() != null && result.text().toUpperCase().contains("ACCEPT");
-        if (!accept) {
-            return;
-        }
-        // 区域线程：将货物放入村民背包（简化处理，落地点）
-        dev.bettervillagers.villager.BVillager bv = merchant;
-        if (bv.entity() == null) {
-            return;
-        }
-        BV.scheduler().runForEntity(bv.entity(), () -> {
-            org.bukkit.entity.Villager v = bv.entity();
-            if (v != null) {
-                org.bukkit.inventory.EntityEquipment eq = v.getEquipment();
-                if (eq != null) {
-                    eq.setItemInMainHandDropChance(0.5f);
-                }
-                v.getWorld().dropItemNaturally(v.getLocation(), stack);
-            }
-        }, null);
-    }
-
-    public long cacheSize() {
-        return priceCache.estimatedSize();
-    }
-
-    public void invalidateAll() {
-        priceCache.invalidateAll();
-    }
-
     /**
      * 为村民生成基于职业的丰富交易列表（问题6：含附魔装备/武器/工具）。
      * <p>
@@ -117,7 +61,7 @@ public final class TradeService {
     }
 
     public List<MerchantRecipe> generateOffers(BVillager merchant, double discount) {
-        discount = Math.min(0.5, Math.max(0.0, discount));
+        discount = Math.clamp(discount, 0.0, 0.5);
         List<MerchantRecipe> recipes = new ArrayList<>();
         if (merchant == null || merchant.profession() == null) {
             return recipes;
@@ -129,14 +73,15 @@ public final class TradeService {
             int basePrice = def.minPrice() + (def.maxPrice() > def.minPrice()
                     ? ThreadLocalRandom.current().nextInt(def.maxPrice() - def.minPrice() + 1)
                     : 0);
-            int price = Math.max(1, (int) Math.floor(basePrice * (1.0 - discount)));
+            int marketPrice = Math.max(basePrice, (int) Math.round(priceOf(result.getType(), def.amount(), basePrice)));
+            int price = Math.max(1, (int) Math.floor(marketPrice * (1.0 - discount)));
             // 随机库存（每次重新生成时刷新）
             int maxUses = 8 + ThreadLocalRandom.current().nextInt(8);
             MerchantRecipe recipe = new MerchantRecipe(result, 0, maxUses, true);
             recipe.setExperienceReward(true); // 确保交易给经验（允许村民升级）
             // 修复问题3：村民交易后获得经验值，支持原版升级机制
             recipe.setVillagerExperience(2);
-            recipe.addIngredient(new ItemStack(Material.EMERALD, Math.max(1, price)));
+            recipe.addIngredient(new ItemStack(Material.EMERALD, price));
             // 部分高价商品额外需要第二种材料（提升丰富度）
             if (price >= 8 && ThreadLocalRandom.current().nextBoolean()) {
                 recipe.addIngredient(new ItemStack(pickSecondary(prof), 1 + ThreadLocalRandom.current().nextInt(2)));
@@ -146,24 +91,13 @@ public final class TradeService {
         return recipes;
     }
 
-    public double friendshipDiscount(BVillager a, BVillager b) {
-        return a == null || b == null ? 0.0 : 0.05;
-    }
-
-    public double friendshipDiscount(int friendship) {
-        return Math.min(0.5, Math.max(0.0, friendship / 100.0 * 0.5));
-    }
-
     /** 选取该职业的第二交易材料（提升交易丰富度）。 */
     private Material pickSecondary(Profession prof) {
         return switch (prof) {
             case KNIGHT, SOLDIER -> ThreadLocalRandom.current().nextBoolean() ? Material.IRON_INGOT : Material.GOLD_INGOT;
-            case ARCHER -> Material.STICK;
-            case BUTCHER -> Material.COAL;
-            case CHEF -> Material.COAL;
+            case ARCHER, BUILDER -> Material.STICK;
+            case BUTCHER, CHEF, MINER -> Material.COAL;
             case FARMER -> Material.WHEAT;
-            case MINER -> Material.COAL;
-            case BUILDER -> Material.STICK;
             case MERCHANT -> Material.GOLD_INGOT;
             default -> Material.DIRT; // 兜底非 AIR，避免空原料异常
         };

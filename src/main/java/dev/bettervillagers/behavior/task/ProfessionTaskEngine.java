@@ -7,9 +7,15 @@ import dev.bettervillagers.behavior.block.BlockInteractionEngine;
 import dev.bettervillagers.profession.Profession;
 import dev.bettervillagers.village.Village;
 import dev.bettervillagers.villager.BVillager;
+import io.papermc.paper.registry.RegistryAccess;
+import io.papermc.paper.registry.RegistryKey;
+import org.bukkit.DyeColor;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.World;
+import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.entity.Animals;
@@ -17,7 +23,6 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.IronGolem;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Sheep;
-import org.bukkit.entity.Tameable;
 import org.bukkit.entity.Villager;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.Damageable;
@@ -135,7 +140,7 @@ public final class ProfessionTaskEngine {
         bv.state(VillagerState.WORKING);
 
         // 1. 收获：寻找半径内成熟作物
-        Block harvestTarget = scanFor(world, origin, OP_RADIUS, ProfessionTaskEngine::isMatureCrop);
+        Block harvestTarget = scanFor(world, origin, ProfessionTaskEngine::isMatureCrop);
         if (harvestTarget != null) {
             if (withinReach(origin, harvestTarget.getLocation())) {
                 blocks.breakAt(bv, harvestTarget.getLocation());
@@ -145,7 +150,7 @@ public final class ProfessionTaskEngine {
             return;
         }
         // 2. 播种：寻找空耕地（FARMLAND 上方为 AIR）
-        Block plantTarget = scanFor(world, origin, OP_RADIUS, ProfessionTaskEngine::isEmptyFarmland);
+        Block plantTarget = scanFor(world, origin, ProfessionTaskEngine::isEmptyFarmland);
         if (plantTarget != null) {
             Location cropLoc = plantTarget.getLocation();
             if (withinReach(origin, cropLoc)) {
@@ -158,7 +163,7 @@ public final class ProfessionTaskEngine {
         }
         // 3. 开垦：寻找水源附近的草地/泥土，翻耕为耕地
         // D6 修复：先扫水源再在其附近找可开垦地块，避免对每个草地块做 81 次 nearWater 读取。
-        Block tillTarget = findTillableNearWater(world, origin, OP_RADIUS);
+        Block tillTarget = findTillableNearWater(world, origin);
         if (tillTarget != null) {
             if (withinReach(origin, tillTarget.getLocation())) {
                 blocks.placeAt(bv, tillTarget.getLocation(), Material.FARMLAND);
@@ -172,40 +177,10 @@ public final class ProfessionTaskEngine {
         wanderInVillage(bv, self, 0.35);
     }
 
-    private boolean feedNearbyPet(LivingEntity self) {
-        for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
-            if (nearby instanceof Tameable pet && (pet.getType() == org.bukkit.entity.EntityType.CAT
-                    || pet.getType() == org.bukkit.entity.EntityType.WOLF) && !pet.isDead()) {
-                Material food = pet.getType() == org.bukkit.entity.EntityType.CAT ? Material.COD : Material.BEEF;
-                self.getWorld().dropItemNaturally(pet.getLocation(), new ItemStack(food));
-                self.getWorld().spawnParticle(Particle.HEART, pet.getLocation().add(0, 1, 0), 2);
-                return true;
-            }
-        }
-        return false;
-    }
-
     private void gatherFarmGoods(LivingEntity self) {
         for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
             if (nearby instanceof Sheep sheep && !sheep.isDead() && !sheep.isSheared()) {
-                Material wool = switch (sheep.getColor()) {
-                    case BLACK -> Material.BLACK_WOOL;
-                    case BLUE -> Material.BLUE_WOOL;
-                    case BROWN -> Material.BROWN_WOOL;
-                    case CYAN -> Material.CYAN_WOOL;
-                    case GRAY -> Material.GRAY_WOOL;
-                    case GREEN -> Material.GREEN_WOOL;
-                    case LIGHT_BLUE -> Material.LIGHT_BLUE_WOOL;
-                    case LIGHT_GRAY -> Material.LIGHT_GRAY_WOOL;
-                    case LIME -> Material.LIME_WOOL;
-                    case MAGENTA -> Material.MAGENTA_WOOL;
-                    case ORANGE -> Material.ORANGE_WOOL;
-                    case PINK -> Material.PINK_WOOL;
-                    case PURPLE -> Material.PURPLE_WOOL;
-                    case RED -> Material.RED_WOOL;
-                    case YELLOW -> Material.YELLOW_WOOL;
-                    default -> Material.WHITE_WOOL;
-                };
+                Material wool = woolFor(sheep.getColor());
                 self.getWorld().dropItemNaturally(sheep.getLocation(), new ItemStack(wool, 1));
                 sheep.setSheared(true);
                 return;
@@ -214,7 +189,7 @@ public final class ProfessionTaskEngine {
                     && self instanceof Villager villager) {
                 long now = System.currentTimeMillis();
                 long last = milkCooldown.getOrDefault(animal.getUniqueId(), 0L);
-                if (now - last >= WORK_INTERVAL_MS && removeOne(villager, Material.BUCKET)) {
+                if (now - last >= WORK_INTERVAL_MS && removeBucket(villager)) {
                     milkCooldown.put(animal.getUniqueId(), now);
                     villager.getInventory().addItem(new ItemStack(Material.MILK_BUCKET));
                     return;
@@ -223,8 +198,32 @@ public final class ProfessionTaskEngine {
         }
     }
 
+    private static Material woolFor(DyeColor color) {
+        if (color == null) {
+            return Material.WHITE_WOOL;
+        }
+        return switch (color) {
+            case BLACK -> Material.BLACK_WOOL;
+            case BLUE -> Material.BLUE_WOOL;
+            case BROWN -> Material.BROWN_WOOL;
+            case CYAN -> Material.CYAN_WOOL;
+            case GRAY -> Material.GRAY_WOOL;
+            case GREEN -> Material.GREEN_WOOL;
+            case LIGHT_BLUE -> Material.LIGHT_BLUE_WOOL;
+            case LIGHT_GRAY -> Material.LIGHT_GRAY_WOOL;
+            case LIME -> Material.LIME_WOOL;
+            case MAGENTA -> Material.MAGENTA_WOOL;
+            case ORANGE -> Material.ORANGE_WOOL;
+            case PINK -> Material.PINK_WOOL;
+            case PURPLE -> Material.PURPLE_WOOL;
+            case RED -> Material.RED_WOOL;
+            case YELLOW -> Material.YELLOW_WOOL;
+            default -> Material.WHITE_WOOL;
+        };
+    }
+
     private boolean seekDoctor(BVillager bv, LivingEntity self) {
-        org.bukkit.attribute.AttributeInstance maxHealth = self.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
+        AttributeInstance maxHealth = maxHealthAttribute(self);
         if (maxHealth == null || self.getHealth() > maxHealth.getValue() * 0.02) {
             return false;
         }
@@ -251,31 +250,45 @@ public final class ProfessionTaskEngine {
             if (!(nearby instanceof Villager villager) || villager == self || villager.isDead()) {
                 continue;
             }
-            org.bukkit.attribute.AttributeInstance maxHealth = villager.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
+            AttributeInstance maxHealth = maxHealthAttribute(villager);
             if (maxHealth == null || villager.getHealth() > maxHealth.getValue() * 0.02
                     || villager.getHealth() >= maxHealth.getValue()) {
                 continue;
             }
             double d = self.getLocation().distanceSquared(villager.getLocation());
-            if (d < best) { best = d; target = villager; }
+            if (d < best) {
+                best = d;
+                target = villager;
+            }
         }
-        if (target == null) return;
+        if (target == null) {
+            return;
+        }
         bv.state(VillagerState.WORKING);
         if (withinReach(self.getLocation(), target.getLocation())) {
             LivingEntity healed = target;
             BV.scheduler().runForEntity(healed, () -> {
                 if (!healed.isDead()) {
-                    double max = healed.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
+                    AttributeInstance maxHealth = maxHealthAttribute(healed);
+                    if (maxHealth == null) {
+                        return;
+                    }
+                    double max = maxHealth.getValue();
                     healed.setHealth(Math.min(max, healed.getHealth() + Math.max(0.5, max * 0.05)));
                     healed.getWorld().spawnParticle(Particle.HEART, healed.getLocation().add(0, 1.5, 0), 1);
                 }
             }, null);
-        } else MovementHelper.moveToward(self, target.getLocation(), WORK_SPEED);
+        } else {
+            MovementHelper.moveToward(self, target.getLocation(), WORK_SPEED);
+        }
     }
 
     private void fishermanCycle(BVillager bv, LivingEntity self) {
         Location water = findWater(self);
-        if (water == null) { wanderInVillage(bv, self, WORK_SPEED); return; }
+        if (water == null) {
+            wanderInVillage(bv, self, WORK_SPEED);
+            return;
+        }
         bv.state(VillagerState.WORKING);
         if (withinReach(self.getLocation(), water)) {
             if (self.getEquipment() != null && self.getEquipment().getItemInMainHand().getType() != Material.FISHING_ROD) {
@@ -283,12 +296,14 @@ public final class ProfessionTaskEngine {
             }
             // FishingHook 与 PlayerFishEvent 仅支持玩家操作者，Villager 不伪造玩家钓鱼事件。
             self.swingMainHand();
-        } else MovementHelper.moveToward(self, water, WORK_SPEED);
+        } else {
+            MovementHelper.moveToward(self, water, WORK_SPEED);
+        }
     }
 
-    private boolean removeOne(Villager villager, Material material) {
+    private boolean removeBucket(Villager villager) {
         for (ItemStack stack : villager.getInventory().getContents()) {
-            if (stack != null && stack.getType() == material && stack.getAmount() > 0) {
+            if (stack != null && stack.getType() == Material.BUCKET && stack.getAmount() > 0) {
                 stack.setAmount(stack.getAmount() - 1);
                 return true;
             }
@@ -299,8 +314,10 @@ public final class ProfessionTaskEngine {
     private Location findWater(LivingEntity self) {
         Location origin = self.getLocation();
         World world = origin.getWorld();
-        if (world == null) return null;
-        Block water = scanFor(world, origin, OP_RADIUS, b -> b.getType() == Material.WATER);
+        if (world == null) {
+            return null;
+        }
+        Block water = scanFor(world, origin, b -> b.getType() == Material.WATER);
         return water == null ? null : water.getLocation();
     }
 
@@ -310,14 +327,17 @@ public final class ProfessionTaskEngine {
         if (item != null && item.getType() != Material.AIR && item.getItemMeta() instanceof Damageable damageable
                 && damageable.hasDamage()) {
             item.addUnsafeEnchantment(Enchantment.UNBREAKING, 1);
-            Villager villager = self instanceof Villager v ? v : null;
-            if (villager != null && BV.trade() != null) villager.setRecipes(BV.trade().generateOffers(bv));
+            if (self instanceof Villager villager && BV.trade() != null) {
+                villager.setRecipes(BV.trade().generateOffers(bv));
+            }
             self.getWorld().spawnParticle(Particle.ENCHANT, self.getLocation().add(0, 1, 0), 5);
         }
     }
 
     private boolean consumeIronIngot(LivingEntity self) {
-        if (!(self instanceof Villager villager)) return false;
+        if (!(self instanceof Villager villager)) {
+            return false;
+        }
         ItemStack[] contents = villager.getInventory().getContents();
         for (ItemStack stack : contents) {
             if (stack != null && stack.getType() == Material.IRON_INGOT && stack.getAmount() > 0) {
@@ -331,16 +351,24 @@ public final class ProfessionTaskEngine {
     private void blacksmithCycle(BVillager bv, LivingEntity self) {
         bv.state(VillagerState.WORKING);
         for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
-            if (nearby instanceof IronGolem golem && !golem.isDead()
-                    && golem.getHealth() < golem.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue()) {
+            if (nearby instanceof IronGolem golem && !golem.isDead()) {
+                AttributeInstance maxHealth = maxHealthAttribute(golem);
+                if (maxHealth == null || golem.getHealth() >= maxHealth.getValue()) {
+                    continue;
+                }
                 if (withinReach(self.getLocation(), golem.getLocation()) && consumeIronIngot(self)) {
-                    LivingEntity repaired = golem;
-                    BV.scheduler().runForEntity(repaired, () -> {
-                        double max = repaired.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
-                        repaired.setHealth(Math.min(max, repaired.getHealth() + 2.0));
-                        repaired.getWorld().spawnParticle(Particle.CRIT, repaired.getLocation().add(0, 1, 0), 2);
+                    BV.scheduler().runForEntity(golem, () -> {
+                        AttributeInstance repairedMaxHealth = maxHealthAttribute(golem);
+                        if (repairedMaxHealth == null) {
+                            return;
+                        }
+                        double max = repairedMaxHealth.getValue();
+                        golem.setHealth(Math.min(max, golem.getHealth() + 2.0));
+                        golem.getWorld().spawnParticle(Particle.CRIT, golem.getLocation().add(0, 1, 0), 2);
                     }, null);
-                } else MovementHelper.moveToward(self, golem.getLocation(), WORK_SPEED);
+                } else {
+                    MovementHelper.moveToward(self, golem.getLocation(), WORK_SPEED);
+                }
                 return;
             }
         }
@@ -349,14 +377,10 @@ public final class ProfessionTaskEngine {
     /** 判断方块是否为可收获的成熟作物。 */
     private static boolean isMatureCrop(Block b) {
         Material m = b.getType();
-        if (m != Material.WHEAT && m != Material.CARROTS
-                && m != Material.POTATOES && m != Material.BEETROOTS) {
-            return false;
-        }
-        if (b.getBlockData() instanceof Ageable age) {
-            return age.getAge() >= age.getMaximumAge();
-        }
-        return false;
+        return (m == Material.WHEAT || m == Material.CARROTS
+                || m == Material.POTATOES || m == Material.BEETROOTS)
+                && b.getBlockData() instanceof Ageable age
+                && age.getAge() >= age.getMaximumAge();
     }
 
     /** 判断方块是否为可播种的空耕地（FARMLAND 上方为 AIR）。 */
@@ -364,18 +388,25 @@ public final class ProfessionTaskEngine {
         if (b.getType() != Material.FARMLAND) {
             return false;
         }
-        Block above = b.getRelative(org.bukkit.block.BlockFace.UP);
-        return above.getType() == Material.AIR;
+        return b.getRelative(org.bukkit.block.BlockFace.UP).getType() == Material.AIR;
     }
 
     /** 判断方块是否可开垦为耕地（草地/泥土且上方为空气）。 */
+    private static AttributeInstance maxHealthAttribute(LivingEntity entity) {
+        try {
+            Attribute attr = RegistryAccess.registryAccess()
+                    .getRegistry(RegistryKey.ATTRIBUTE)
+                    .get(NamespacedKey.minecraft("max_health"));
+            return attr == null ? null : entity.getAttribute(attr);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
     private boolean isTillable(Block b) {
         Material m = b.getType();
-        if (m != Material.GRASS_BLOCK && m != Material.DIRT && m != Material.COARSE_DIRT) {
-            return false;
-        }
-        Block above = b.getRelative(org.bukkit.block.BlockFace.UP);
-        return above.getType() == Material.AIR;
+        return (m == Material.GRASS_BLOCK || m == Material.DIRT || m == Material.COARSE_DIRT)
+                && b.getRelative(org.bukkit.block.BlockFace.UP).getType() == Material.AIR;
     }
 
     /**
@@ -385,12 +416,12 @@ public final class ProfessionTaskEngine {
      * 9×9=81 次水源扫描，最坏 ~49000 次方块读取。改为先以 O(n²) 找水源，
      * 再仅在水方块附近 9×9 局部找可开垦地块，避免重复扫描水源。
      */
-    private Block findTillableNearWater(World world, Location origin, int radius) {
+    private Block findTillableNearWater(World world, Location origin) {
         int ox = origin.getBlockX();
         int oy = origin.getBlockY();
         int oz = origin.getBlockZ();
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
+        for (int dx = -OP_RADIUS; dx <= OP_RADIUS; dx++) {
+            for (int dz = -OP_RADIUS; dz <= OP_RADIUS; dz++) {
                 if (world.getBlockAt(ox + dx, oy, oz + dz).getType() != Material.WATER) {
                     continue;
                 }
@@ -410,8 +441,7 @@ public final class ProfessionTaskEngine {
 
     /** 随机选择播种的作物类型（贴合原版村民种植多样性）。 */
     private Material pickCropMaterial() {
-        int r = ThreadLocalRandom.current().nextInt(4);
-        return switch (r) {
+        return switch (ThreadLocalRandom.current().nextInt(4)) {
             case 0 -> Material.WHEAT;
             case 1 -> Material.CARROTS;
             case 2 -> Material.POTATOES;
@@ -429,7 +459,7 @@ public final class ProfessionTaskEngine {
         }
         bv.state(VillagerState.WORKING);
         // 寻找半径内的矿石（白名单内）
-        Block ore = scanFor(world, origin, OP_RADIUS, b -> {
+        Block ore = scanFor(world, origin, b -> {
             String name = b.getType().name();
             return name.endsWith("_ORE");
         });
@@ -455,7 +485,7 @@ public final class ProfessionTaskEngine {
         }
         bv.state(VillagerState.WORKING);
         // 寻找工作台/烟熏炉/熔炉
-        Block station = scanFor(world, origin, OP_RADIUS, b ->
+        Block station = scanFor(world, origin, b ->
                 b.getType() == Material.CRAFTING_TABLE
                         || b.getType() == Material.SMOKER
                         || b.getType() == Material.FURNACE);
@@ -490,7 +520,7 @@ public final class ProfessionTaskEngine {
     private void merchantCycle(BVillager bv, LivingEntity self) {
         // 商人聚集到村庄中心区域（市集），实际交易由自动交易系统调度
         bv.state(VillagerState.WORKING);
-        moveToVillageCenter(bv, self, WORK_SPEED);
+        moveToVillageCenter(bv, self);
     }
 
     // ==================== 建筑师：协助建造 ====================
@@ -502,7 +532,7 @@ public final class ProfessionTaskEngine {
         World world = origin.getWorld();
         if (world != null) {
             // 采集建材（白名单内的木头/石头类方块）
-            Block mat = scanFor(world, origin, OP_RADIUS, b -> {
+            Block mat = scanFor(world, origin, b -> {
                 String name = b.getType().name();
                 return name.endsWith("_LOG") || name.endsWith("_PLANKS")
                         || b.getType() == Material.COBBLESTONE;
@@ -512,7 +542,7 @@ public final class ProfessionTaskEngine {
                 return;
             }
         }
-        moveToVillageCenter(bv, self, WORK_SPEED);
+        moveToVillageCenter(bv, self);
     }
 
     // ==================== 国王：坐镇指挥 ====================
@@ -548,13 +578,13 @@ public final class ProfessionTaskEngine {
     // ==================== 公共辅助 ====================
 
     /** 在半径内扫描满足条件的第一个方块。 */
-    private Block scanFor(World world, Location origin, int radius, java.util.function.Predicate<Block> test) {
+    private Block scanFor(World world, Location origin, java.util.function.Predicate<Block> test) {
         int ox = origin.getBlockX();
         int oy = origin.getBlockY();
         int oz = origin.getBlockZ();
-        for (int dx = -radius; dx <= radius; dx++) {
+        for (int dx = -OP_RADIUS; dx <= OP_RADIUS; dx++) {
             for (int dy = -2; dy <= 2; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
+                for (int dz = -OP_RADIUS; dz <= OP_RADIUS; dz++) {
                     Block b = world.getBlockAt(ox + dx, oy + dy, oz + dz);
                     if (test.test(b)) {
                         return b;
@@ -595,10 +625,10 @@ public final class ProfessionTaskEngine {
     }
 
     /** 向村庄中心移动。 */
-    private void moveToVillageCenter(BVillager bv, LivingEntity self, double speed) {
+    private void moveToVillageCenter(BVillager bv, LivingEntity self) {
         Village v = BV.villages() != null ? BV.villages().get(bv.villageId()).orElse(null) : null;
         if (v == null) {
-            wanderInVillage(bv, self, speed);
+            wanderInVillage(bv, self, WORK_SPEED);
             return;
         }
         World world = org.bukkit.Bukkit.getWorld(v.world());
@@ -612,6 +642,6 @@ public final class ProfessionTaskEngine {
                 v.centerX() + Math.cos(angle) * r,
                 v.centerY(),
                 v.centerZ() + Math.sin(angle) * r);
-        MovementHelper.moveToward(self, target, speed);
+        MovementHelper.moveToward(self, target, WORK_SPEED);
     }
 }

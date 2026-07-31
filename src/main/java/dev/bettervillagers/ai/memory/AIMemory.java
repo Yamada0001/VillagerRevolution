@@ -15,7 +15,7 @@ import java.util.List;
 public final class AIMemory {
 
     private final int maxHistory;
-    private final List<AIRequest.Message> messages = new java.util.concurrent.CopyOnWriteArrayList();
+    private final List<AIRequest.Message> messages = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public AIMemory(int maxHistory) {
         this.maxHistory = maxHistory;
@@ -30,11 +30,6 @@ public final class AIMemory {
             messages.add(AIRequest.Message.assistant(assistant));
         }
         prune(maxHistory);
-    }
-
-    /** 注入关键事实（长期记忆，标记为 system，裁剪时优先保留）。 */
-    public void addKeyFact(String fact) {
-        messages.add(0, AIRequest.Message.system(fact));
     }
 
     /**
@@ -63,10 +58,6 @@ public final class AIMemory {
 
     public synchronized List<AIRequest.Message> messages() {
         return List.copyOf(messages);
-    }
-
-    public synchronized void clear() {
-        messages.clear();
     }
 
     /** 序列化为 JSON 文本（规范 8.2 ai_memory 字段）。 */
@@ -98,8 +89,11 @@ public final class AIMemory {
             }
         } catch (Exception e) {
             // 容错：损坏的记忆记录到日志（含原因），便于排查数据损坏（规范 3.3：禁止静默吞异常）
+            String template = dev.bettervillagers.BV.messages() != null
+                    ? dev.bettervillagers.BV.messages().raw("log.ai-memory-parse-fail")
+                    : "log.ai-memory-parse-fail";
             dev.bettervillagers.BV.plugin().getLogger().warning(
-                    "AIMemory 解析失败，已忽略损坏记忆: " + e.getMessage());
+                    template.replace("{error}", String.valueOf(e.getMessage())));
         }
         return mem;
     }

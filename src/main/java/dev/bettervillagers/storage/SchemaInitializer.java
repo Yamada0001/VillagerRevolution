@@ -17,7 +17,6 @@ public final class SchemaInitializer {
 
     public static void init(ConnectionFactory factory, boolean mysql) {
         String autoVillage = mysql ? "INT AUTO_INCREMENT PRIMARY KEY" : "INTEGER PRIMARY KEY AUTOINCREMENT";
-        String autoRegion = autoVillage;
         try (Connection c = factory.get();
              Statement st = c.createStatement()) {
             st.executeUpdate("""
@@ -60,10 +59,14 @@ public final class SchemaInitializer {
                         max_x INT, max_y INT, max_z INT,
                         owner VARCHAR(36),
                         created_at BIGINT
-                    )""".formatted(autoRegion));
+                    )""".formatted(autoVillage));
             st.executeUpdate("CREATE INDEX IF NOT EXISTS idx_villagers_village ON villagers(village_id)");
+            st.executeUpdate("CREATE TABLE IF NOT EXISTS build_layouts (village_id INT, world VARCHAR(64), build_type VARCHAR(32), template_id VARCHAR(128), center_x INT, center_y INT, center_z INT, min_x INT, max_x INT, min_z INT, max_z INT, rotation VARCHAR(32), mirror VARCHAR(32), cluster_id VARCHAR(128) NOT NULL DEFAULT '')");
+            st.executeUpdate("CREATE TABLE IF NOT EXISTS road_ports (village_id INT, world VARCHAR(64), x INT, y INT, z INT, direction VARCHAR(16))");
             // 兼容旧库：villages 表增加 name 列（已存在则忽略，规范 8.2）
             addColumnIfMissing(st, "villages", "name", "VARCHAR(64)");
+            addColumnIfMissing(st, "build_layouts", "cluster_id", "VARCHAR(128) NOT NULL DEFAULT ''");
+            st.executeUpdate("UPDATE build_layouts SET cluster_id='' WHERE cluster_id IS NULL");
         } catch (SQLException e) {
             throw new RuntimeException(BV.messages().raw("errors.schema-init").replace("{error}", e.getMessage()), e);
         }

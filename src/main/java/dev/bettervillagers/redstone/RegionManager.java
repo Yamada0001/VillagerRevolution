@@ -7,9 +7,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 生电保护区管理器（规范 5.x：保护区内完全关闭 AI，恢复原版）。
- * <p>
- * 启动时从配置与数据库加载保护区到内存；运行期 {@link #isProtected} 提供高频查询。
+ * Runtime manager for redstone protected regions.
  */
 public final class RegionManager {
 
@@ -20,10 +18,8 @@ public final class RegionManager {
         this.enabled = enabled;
     }
 
-    /** 异步加载：配置预设 + 数据库。 */
     public void load() {
         BV.scheduler().runAsync(() -> {
-            // 数据库
             List<ProtectedRegion> db = BV.storage().regions().findAll();
             synchronized (regions) {
                 regions.clear();
@@ -32,7 +28,6 @@ public final class RegionManager {
         });
     }
 
-    /** 该坐标是否处于生电保护区内（高频查询，仅内存判定）。 */
     public boolean isProtected(org.bukkit.Location location) {
         if (!enabled) {
             return false;
@@ -63,16 +58,42 @@ public final class RegionManager {
         }
     }
 
-    /** 创建保护区（异步落库）。返回 false 表示名称已存在。 */
     public boolean create(String name, String world, int x1, int y1, int z1, int x2, int y2, int z2, String owner) {
         if (findByName(name).isPresent()) {
             return false;
         }
-        ProtectedRegion normalized = normalize(0, name, world, x1, y1, z1, x2, y2, z2, owner);
+        ProtectedRegion normalized = normalize(name, world, x1, y1, z1, x2, y2, z2, owner);
         synchronized (regions) {
             regions.add(normalized);
         }
-        BV.scheduler().runAsync(() -> BV.storage().regions().insert(normalized));
+        BV.scheduler().runAsync(() -> {
+            int id = BV.storage().regions().insert(normalized);
+            if (id <= 0) {
+                return;
+            }
+            ProtectedRegion persisted = new ProtectedRegion(id, normalized.name(), normalized.world(),
+                    normalized.minX(), normalized.minY(), normalized.minZ(),
+                    normalized.maxX(), normalized.maxY(), normalized.maxZ(), normalized.owner());
+            synchronized (regions) {
+                int index = regions.indexOf(normalized);
+                if (index >= 0) {
+                    regions.set(index, persisted);
+                    return;
+                }
+                regions.stream()
+                        .filter(region -> samePendingRegion(region, normalized))
+                        .findFirst()
+                        .ifPresent(current -> {
+                            ProtectedRegion currentPersisted = new ProtectedRegion(id,
+                                    current.name(), current.world(), current.minX(), current.minY(), current.minZ(),
+                                    current.maxX(), current.maxY(), current.maxZ(), current.owner());
+                            regions.set(regions.indexOf(current), currentPersisted);
+                            if (!current.name().equals(normalized.name())) {
+                                BV.storage().regions().update(currentPersisted);
+                            }
+                        });
+            }
+        });
         return true;
     }
 
@@ -93,27 +114,6 @@ public final class RegionManager {
         return true;
     }
 
-    /** 调整保护区范围（支持 redstone.modify 权限节点）。返回 false 表示保护区不存在。 */
-    public boolean resize(String name, String world, int x1, int y1, int z1, int x2, int y2, int z2) {
-        ProtectedRegion existing = findByName(name).orElse(null);
-        if (existing == null) {
-            return false;
-        }
-        ProtectedRegion resized = normalize(existing.id(), name, world, x1, y1, z1, x2, y2, z2, existing.owner());
-        synchronized (regions) {
-            regions.remove(existing);
-            regions.add(resized);
-        }
-        int id = existing.id();
-        BV.scheduler().runAsync(() -> {
-            if (id > 0) {
-                BV.storage().regions().update(resized);
-            }
-        });
-        return true;
-    }
-
-    /** 修改保护区名称与所有者（支持 redstone.modify 权限节点）。返回 false 表示不存在或新名称已被占用。 */
     public boolean modify(String name, String newName, String owner) {
         ProtectedRegion existing = findByName(name).orElse(null);
         if (existing == null) {
@@ -140,8 +140,16 @@ public final class RegionManager {
         return true;
     }
 
-    private ProtectedRegion normalize(int id, String name, String world, int x1, int y1, int z1, int x2, int y2, int z2, String owner) {
-        return new ProtectedRegion(id, name, world,
+    private boolean samePendingRegion(ProtectedRegion candidate, ProtectedRegion created) {
+        return candidate.id() == 0
+                && candidate.world().equals(created.world())
+                && candidate.minX() == created.minX() && candidate.minY() == created.minY() && candidate.minZ() == created.minZ()
+                && candidate.maxX() == created.maxX() && candidate.maxY() == created.maxY() && candidate.maxZ() == created.maxZ()
+                && candidate.owner().equals(created.owner());
+    }
+
+    private ProtectedRegion normalize(String name, String world, int x1, int y1, int z1, int x2, int y2, int z2, String owner) {
+        return new ProtectedRegion(0, name, world,
                 Math.min(x1, x2), Math.min(y1, y2), Math.min(z1, z2),
                 Math.max(x1, x2), Math.max(y1, y2), Math.max(z1, z2),
                 owner);

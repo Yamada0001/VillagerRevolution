@@ -3,7 +3,6 @@ package dev.bettervillagers.ai.cache;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
-import com.github.benmanes.caffeine.cache.stats.CacheStats;
 
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
@@ -72,14 +71,6 @@ public final class DecisionCache {
 
     public long misses() {
         return misses.get();
-    }
-
-    public long size() {
-        return cache.estimatedSize();
-    }
-
-    public CacheStats stats() {
-        return cache.stats();
     }
 
     public void invalidateAll() {

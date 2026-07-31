@@ -5,7 +5,6 @@ import dev.bettervillagers.behavior.MovementHelper;
 import dev.bettervillagers.behavior.VillagerState;
 import dev.bettervillagers.behavior.threat.ThreatDetector;
 import dev.bettervillagers.profession.Profession;
-import dev.bettervillagers.village.Village;
 import dev.bettervillagers.villager.BVillager;
 import org.bukkit.Location;
 import org.bukkit.entity.LivingEntity;

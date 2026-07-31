@@ -10,7 +10,7 @@ public class AIException extends RuntimeException {
         this.retriable = retriable;
     }
 
-    public boolean isRetriable() {
-        return retriable;
+    public boolean isTerminal() {
+        return !retriable;
     }
 }

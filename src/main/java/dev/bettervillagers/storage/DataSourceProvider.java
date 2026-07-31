@@ -29,8 +29,11 @@ public final class DataSourceProvider {
 
     private HikariDataSource buildSqlite(ConfigurationSection cfg) {
         String file = cfg.getString("sqlite-file", "bettervillagers.db");
-        File dbFile = new File(plugin.getDataFolder(), file);
-        plugin.getDataFolder().mkdirs();
+        File dataFolder = plugin.getDataFolder();
+        if (!dataFolder.isDirectory() && !dataFolder.mkdirs() && !dataFolder.isDirectory()) {
+            throw new IllegalStateException("无法创建插件数据目录: " + dataFolder);
+        }
+        File dbFile = new File(dataFolder, file);
 
         HikariConfig hc = new HikariConfig();
         hc.setPoolName("BetterVillagers-SQLite");
@@ -44,6 +47,9 @@ public final class DataSourceProvider {
 
     private HikariDataSource buildMysql(ConfigurationSection cfg) {
         ConfigurationSection m = cfg.getConfigurationSection("mysql");
+        if (m == null) {
+            throw new IllegalArgumentException("缺少 storage.mysql 配置段");
+        }
         String host = m.getString("host", "localhost");
         int port = m.getInt("port", 3306);
         String database = m.getString("database", "bettervillagers");
@@ -79,10 +85,6 @@ public final class DataSourceProvider {
 
     public Connection connection() throws SQLException {
         return dataSource.getConnection();
-    }
-
-    public HikariDataSource dataSource() {
-        return dataSource;
     }
 
     public void close() {

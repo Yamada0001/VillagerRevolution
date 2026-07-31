@@ -33,6 +33,7 @@ public final class StrategicAI {
     private static final double NIGHT_SKIP_PROBABILITY = 0.7;
     private static final Set<Integer> planningVillages = ConcurrentHashMap.newKeySet();
     private static final Map<Integer, Long> lastCommandTime = new ConcurrentHashMap<>();
+    private volatile boolean shutdown;
 
     /**
      * 清理指定村庄的战略相关缓存（村庄合并/删除时调用，规范 4.x：避免静态 Map 残留 stale 条目）。
@@ -47,6 +48,9 @@ public final class StrategicAI {
     }
 
     public void decide(BVillager king) {
+        if (shutdown) {
+            return;
+        }
         long now = System.currentTimeMillis();
         if (now - king.lastStrategic() < intervalMillis) {
             return;
@@ -115,19 +119,30 @@ public final class StrategicAI {
 
         AIContext ctx = new AIContext(king.uuid(), king.name(), "king", "strategic", system, user);
         BV.ai().decide(ctx)
-                .thenAccept(r -> applyPlan(king, village, r, recommended, phase, pop))
+                .thenAccept(r -> {
+                    if (!isRunning()) {
+                        planningVillages.remove(village.id());
+                        return;
+                    }
+                    applyPlan(king, village, r, recommended, phase);
+                })
                 .exceptionally(ex -> {
                     planningVillages.remove(village.id());
-                    BV.plugin().getLogger().warning(
-                            BV.messages().raw("log.strategic-tick-error")
-                                    .replace("{uuid}", king.uuid()).replace("{error}", String.valueOf(ex)));
+                    if (isRunning()) {
+                        BV.plugin().getLogger().warning(
+                                BV.messages().raw("log.strategic-tick-error")
+                                        .replace("{uuid}", king.uuid()).replace("{error}", String.valueOf(ex)));
+                    }
                     return null;
                 });
     }
 
     private void applyPlan(BVillager king, Village village, AIResult result,
-                           BuildType recommended, BuildType.DevPhase phase, int pop) {
+                           BuildType recommended, BuildType.DevPhase phase) {
         try {
+            if (!isRunning()) {
+                return;
+            }
             BuildType type = recommended;
             boolean isDegraded = result == null || !result.isUsable();
             if (!isDegraded) {
@@ -141,16 +156,13 @@ public final class StrategicAI {
                     type = parsed;
                 }
             }
-            if (type == null || !type.physical()) {
-                type = recommended;
-            }
-            // 强制当前阶段推荐，防止缓存/AI 偏差
-            if (type.phase() != phase) {
-                type = recommended;
+            // 推荐结果本身必须满足当前阶段，避免异常配置导致空指针或跨阶段建造。
+            if (type == null || !type.physical() || type.phase() != phase) {
+                return;
             }
 
             lastCommandTime.put(village.id(), System.currentTimeMillis());
-            org.bukkit.Location center = pickSite(village, type, pop);
+            org.bukkit.Location center = pickSite(village, type);
             if (center == null || center.getWorld() == null) {
                 return;
             }
@@ -158,9 +170,8 @@ public final class StrategicAI {
             final BuildType finalType = type;
             final org.bukkit.Location buildCenter = center;
             // 异步下发：阶段内可并行多个 issueTask
-            BV.scheduler().runAsync(() -> {
-                BV.building().issueTask(finalType.name(), village.id(), buildCenter);
-            });
+            BV.scheduler().runAsync(() -> BV.building().issueTask(
+                    finalType.name(), village.id(), buildCenter));
             String displayName = BV.messages().raw("structure." + finalType.structureKey());
             if (displayName.startsWith("structure.")) {
                 displayName = finalType.name();
@@ -171,6 +182,16 @@ public final class StrategicAI {
         } finally {
             planningVillages.remove(village.id());
         }
+    }
+
+    public void shutdown() {
+        shutdown = true;
+        planningVillages.clear();
+    }
+
+    private boolean isRunning() {
+        return !shutdown && BV.plugin() != null && BV.plugin().isEnabled()
+                && BV.scheduler() != null && BV.messages() != null && BV.building() != null;
     }
 
     private void notifyVillagePlayers(Village village, String kingName, String command) {
@@ -202,7 +223,7 @@ public final class StrategicAI {
      * 按类型选择与村庄格局协调的落点：
      * 道路沿中心十字偏移；街景贴路；房屋内环；城墙外环。
      */
-    private org.bukkit.Location pickSite(Village village, BuildType type, int pop) {
+    private org.bukkit.Location pickSite(Village village, BuildType type) {
         org.bukkit.World world = org.bukkit.Bukkit.getWorld(village.world());
         if (world == null) {
             return null;
@@ -212,16 +233,7 @@ public final class StrategicAI {
         double angle = Math.random() * Math.PI * 2;
         int idx = BV.building().cache().count(village.id(), type);
         return switch (type) {
-            case ROAD -> {
-                // 分段道路：沿轴线间隔推进
-                int axis = idx % 2;
-                int seg = idx / 2 + 1;
-                double off = 8.0 * seg;
-                if (axis == 0) {
-                    yield base.clone().add(off, 0, 0);
-                }
-                yield base.clone().add(0, 0, off);
-            }
+            case ROAD -> BV.building().nextRoadSite(village.id(), base);
             case STREETSCAPE -> {
                 double r = 6 + (idx % 4) * 4;
                 yield base.clone().add(Math.cos(angle) * r, 0, Math.sin(angle) * r);

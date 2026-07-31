@@ -80,8 +80,8 @@ public final class AIService {
                     tokens -= 1.0;
                     return;
                 }
-                long waitMs = Math.min(1000L, Math.max(1L,
-                        (long) Math.ceil((1.0 - tokens) / rate * 1000.0)));
+                long waitMs = Math.clamp(
+                        (long) Math.ceil((1.0 - tokens) / rate * 1000.0), 1L, 1000L);
                 try {
                     wait(waitMs);
                 } catch (InterruptedException e) {
@@ -167,7 +167,7 @@ public final class AIService {
      * 修复问题8：reload 后立即应用新的 provider / api-key / endpoint，
      * 无需重启服务器。保留缓存、记忆与熔断器（仅重建 provider 实例）。
      */
-    public void reconfigure(ConfigurationSection newAiCfg, ConfigurationSection newCbCfg) {
+    public void reconfigure(ConfigurationSection newAiCfg) {
         this.aiCfg = newAiCfg;
         this.temperature = newAiCfg.getDouble("temperature", 0.7);
         this.maxTokens = newAiCfg.getInt("max-tokens", 500);
@@ -202,7 +202,7 @@ public final class AIService {
      */
     public CompletableFuture<AIResult> decide(AIContext ctx) {
         // 1. 熔断判定；缓存命中也必须完成 HALF_OPEN 探针生命周期
-        if (breaker != null && !breaker.allowRequest()) {
+        if (breaker != null && breaker.shouldRejectRequest()) {
             return CompletableFuture.completedFuture(AIResult.degraded(""));
         }
         String cacheKey = ctx.villagerUuid() + "|" + ctx.profession() + "|" + ctx.scenario() + "|" + sha256Short(ctx.userPrompt());
@@ -215,7 +215,7 @@ public final class AIService {
         }
 
         return CompletableFuture.supplyAsync(() -> {
-            LockRef ref = villagerLocks.compute(ctx.villagerUuid(), (key, existing) -> {
+            LockRef ref = villagerLocks.compute(ctx.villagerUuid(), (ignored, existing) -> {
                 LockRef value = existing == null ? new LockRef() : existing;
                 value.users.incrementAndGet();
                 return value;
@@ -262,7 +262,6 @@ public final class AIService {
         // model 留空，由 provider 使用自身配置的 defaultModel
         AIRequest request = new AIRequest(msgs, "", temperature, maxTokens, timeout);
 
-        AIException lastError = null;
         for (AIProvider p : chain) {
             try {
                 String text = retry(p, request);
@@ -274,12 +273,9 @@ public final class AIService {
                 mem.append(ctx.userPrompt(), text);
                 return AIResult.ok(text);
             } catch (AIException e) {
-                lastError = e;
                 BV.plugin().getLogger().warning(BV.messages().raw("log.provider-failed")
                         .replace("{id}", p.id()).replace("{error}", String.valueOf(e.getMessage())));
             } catch (Throwable t) {
-                lastError = new AIException(BV.messages().raw("log.provider-error")
-                        .replace("{id}", p.id()).replace("{error}", String.valueOf(t.getMessage())), t, false);
                 BV.plugin().getLogger().warning(BV.messages().raw("log.provider-error")
                         .replace("{id}", p.id()).replace("{error}", String.valueOf(t)));
             }
@@ -296,7 +292,9 @@ public final class AIService {
     /** 规则引擎降级决策（规范 4.5 末级）。 */
     private String ruleBasedDecision(AIContext ctx) {
         String scenario = ctx.scenario();
-        if (scenario == null) return "HOLD";
+        if (scenario == null) {
+            return "HOLD";
+        }
         return switch (scenario.toLowerCase()) {
             case "combat", "threat" -> "FLEE";
             case "trade" -> "ACCEPT";
@@ -308,20 +306,17 @@ public final class AIService {
 
     /** 指数退避重试（规范 1.3：初始 1s，上限 8s）。 */
     private String retry(AIProvider provider, AIRequest req) throws AIException {
-        AIException last = null;
-        for (int attempt = 0; attempt <= retryAttempts; attempt++) {
+        for (int attempt = 0; ; attempt++) {
             try {
                 rateLimiter.acquire();
                 return provider.completeBlocking(req);
             } catch (AIException e) {
-                last = e;
-                if (!e.isRetriable() || attempt == retryAttempts) {
+                if (e.isTerminal() || attempt >= retryAttempts) {
                     throw e;
                 }
                 sleepBackoff(attempt);
             }
         }
-        throw last;
     }
 
     private void sleepBackoff(int attempt) {
@@ -361,10 +356,6 @@ public final class AIService {
         return breaker;
     }
 
-    public boolean isAvailable() {
-        return breaker == null || breaker.isAvailable();
-    }
-
     public String primaryProviderId() {
         return primary.id();
     }
@@ -383,6 +374,6 @@ public final class AIService {
 
     /** 清理已移除村民的锁（规范 1.3 资源管理）。 */
     public void evictLock(String uuid) {
-        villagerLocks.computeIfPresent(uuid, (key, ref) -> ref.users.get() == 0 ? null : ref);
+        villagerLocks.computeIfPresent(uuid, (ignored, ref) -> ref.users.get() == 0 ? null : ref);
     }
 }

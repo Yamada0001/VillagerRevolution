@@ -28,6 +28,7 @@ public final class TacticalAI {
 
     private final ThreatDetector threatDetector;
     private final long intervalMillis;
+    private volatile boolean shutdown;
 
     public TacticalAI(ThreatDetector threatDetector, long intervalMillis) {
         this.threatDetector = threatDetector;
@@ -36,6 +37,9 @@ public final class TacticalAI {
 
     /** 触发一次战术决策（由行为引擎 tick 调用，运行于全局区域线程）。 */
     public void decide(BVillager bv) {
+        if (!isRunning() || isSocialState(bv)) {
+            return;
+        }
         long now = System.currentTimeMillis();
         if (now - bv.lastTactical() < intervalMillis) {
             return;
@@ -47,18 +51,24 @@ public final class TacticalAI {
         bv.lastTactical(now);
 
         // 威胁快照（区域线程内安全读取）
-        List<Threat> threats = threatDetector.scan(self);
+        List<Threat> threats = threatDetector.scan(self, bv.villageId());
         ProfessionData pd = bv.professionData();
         String system = buildSystemPrompt(bv.profession(), pd);
         String user = buildUserPrompt(bv, self.getLocation(), threats);
 
         AIContext ctx = new AIContext(bv.uuid(), bv.name(), bv.profession().id(), "tactical", system, user);
         BV.ai().decide(ctx)
-                .thenAccept(result -> applyResult(bv, result))
+                .thenAccept(result -> {
+                    if (isRunning()) {
+                        applyResult(bv, result);
+                    }
+                })
                 .exceptionally(ex -> {
-                    BV.plugin().getLogger().warning(
-                            BV.messages().raw("log.tactical-tick-error")
-                                    .replace("{uuid}", bv.uuid()).replace("{error}", String.valueOf(ex)));
+                    if (isRunning()) {
+                        BV.plugin().getLogger().warning(
+                                BV.messages().raw("log.tactical-tick-error")
+                                        .replace("{uuid}", bv.uuid()).replace("{error}", String.valueOf(ex)));
+                    }
                     return null;
                 });
     }
@@ -90,6 +100,9 @@ public final class TacticalAI {
     }
 
     private void applyResult(BVillager bv, AIResult result) {
+        if (!isRunning() || isSocialState(bv)) {
+            return;
+        }
         // 修复问题2：AI 降级/不可用时默认执行 WORK（巡逻锚点），而非什么都不做卡住
         String action;
         if (result == null || !result.isUsable()) {
@@ -97,7 +110,27 @@ public final class TacticalAI {
         } else {
             action = parseAction(result.text());
         }
-        BV.scheduler().runForEntity(bv.entity(), () -> doAction(bv, action), null);
+        LivingEntity entity = bv.entity();
+        if (entity != null && isRunning() && !isSocialState(bv)) {
+            BV.scheduler().runForEntity(entity, () -> {
+                if (isRunning() && !isSocialState(bv)) {
+                    doAction(bv, action);
+                }
+            }, null);
+        }
+    }
+
+    private boolean isSocialState(BVillager bv) {
+        return bv.state() == VillagerState.SOCIALIZING || bv.state() == VillagerState.TRADING;
+    }
+
+    private boolean isRunning() {
+        return !shutdown && BV.plugin() != null && BV.plugin().isEnabled()
+                && BV.scheduler() != null && BV.messages() != null;
+    }
+
+    public void shutdown() {
+        shutdown = true;
     }
 
     private String parseAction(String text) {
@@ -111,6 +144,9 @@ public final class TacticalAI {
     }
 
     private void doAction(BVillager bv, String action) {
+        if (!isRunning() || isSocialState(bv)) {
+            return;
+        }
         LivingEntity self = bv.entity();
         if (self == null) {
             return;
@@ -120,9 +156,9 @@ public final class TacticalAI {
                 // 修复问题5：战术层仅设置战斗状态并接近敌人，不直接造成伤害。
                 // 实际攻击伤害由反射层 combatTick（每0.5s，1s冷却）负责，确保一下一下攻击。
                 bv.state(VillagerState.COMBAT);
-                List<Threat> threats = threatDetector.scan(self);
+                List<Threat> threats = threatDetector.scan(self, bv.villageId());
                 if (!threats.isEmpty()) {
-                    org.bukkit.entity.Entity src = threats.get(0).source();
+                    org.bukkit.entity.Entity src = threats.getFirst().source();
                     if (src instanceof LivingEntity enemy && !enemy.isDead()) {
                         dev.bettervillagers.behavior.MovementHelper.moveToward(self, enemy.getLocation(), TACTICAL_SPEED);
                     }

@@ -18,13 +18,10 @@ public final class VanillaProfessionMapper {
         return switch (prof) {
             case KING, KNIGHT, SOLDIER -> Villager.Profession.WEAPONSMITH;
             case ARCHER -> Villager.Profession.FLETCHER;
-            case BUTCHER -> Villager.Profession.BUTCHER;
-            case CHEF -> Villager.Profession.BUTCHER;
+            case BUTCHER, CHEF -> Villager.Profession.BUTCHER;
             case FARMER -> Villager.Profession.FARMER;
             case MINER -> Villager.Profession.MASON;
-            case BUILDER -> Villager.Profession.CLERIC;
-            case MERCHANT, ENCHANTER -> Villager.Profession.CLERIC;
-            case DOCTOR -> Villager.Profession.CLERIC;
+            case BUILDER, MERCHANT, ENCHANTER, DOCTOR -> Villager.Profession.CLERIC;
             case FISHERMAN -> Villager.Profession.FISHERMAN;
             case BLACKSMITH -> Villager.Profession.TOOLSMITH;
             default -> Villager.Profession.NITWIT;

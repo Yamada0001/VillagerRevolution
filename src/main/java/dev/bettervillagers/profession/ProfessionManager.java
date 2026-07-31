@@ -2,6 +2,7 @@ package dev.bettervillagers.profession;
 
 import dev.bettervillagers.trade.TradeOffer;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -9,6 +10,7 @@ import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.components.CustomModelDataComponent;
 import org.bukkit.plugin.Plugin;
 
 import java.util.ArrayList;
@@ -154,7 +156,6 @@ public final class ProfessionManager {
         return trades;
     }
 
-    @SuppressWarnings("unchecked")
     private EquipmentSpec parseEquipment(Object val) {
         if (val instanceof String str) {
             return EquipmentSpec.parse(str);
@@ -194,12 +195,7 @@ public final class ProfessionManager {
             return false;
         }
         String name = material.name();
-        for (String pattern : d.blockWhitelist()) {
-            if (name.equals(pattern) || name.matches(pattern)) {
-                return true;
-            }
-        }
-        return false;
+        return d.blockWhitelist().stream().anyMatch(pattern -> name.equals(pattern) || name.matches(pattern));
     }
 
     /**
@@ -270,7 +266,9 @@ public final class ProfessionManager {
             ItemMeta meta = item.getItemMeta();
             if (meta != null) {
                 if (spec.customModelData() != null) {
-                    meta.setCustomModelData(spec.customModelData());
+                    CustomModelDataComponent modelData = meta.getCustomModelDataComponent();
+                    modelData.setFloats(List.of(spec.customModelData().floatValue()));
+                    meta.setCustomModelDataComponent(modelData);
                 }
                 if (spec.color() != null && meta instanceof org.bukkit.inventory.meta.LeatherArmorMeta lam) {
                     lam.setColor(spec.color());
@@ -279,11 +277,6 @@ public final class ProfessionManager {
             }
         }
         return item;
-    }
-
-    public Map<String, EquipmentSpec> equipmentOf(Profession p) {
-        ProfessionData d = data(p);
-        return d != null ? d.equipment() : Map.of();
     }
 
     /** 构造交易商品 ItemStack（含附魔，问题6）。 */
@@ -299,7 +292,7 @@ public final class ProfessionManager {
                 for (TradeOffer.EnchantSpec es : offer.enchants()) {
                     Enchantment ench = matchEnchantment(es.name());
                     if (ench != null) {
-                        int lvl = Math.max(1, Math.min(es.level(), ench.getMaxLevel()));
+                        int lvl = Math.clamp(es.level(), 1, ench.getMaxLevel());
                         meta.addEnchant(ench, lvl, true);
                     }
                 }
@@ -357,7 +350,9 @@ public final class ProfessionManager {
             case "SWEEPING_EDGE" -> "sweeping_edge";
             default -> n.toLowerCase(Locale.ROOT);
         };
-        return org.bukkit.Registry.ENCHANTMENT.get(org.bukkit.NamespacedKey.minecraft(key));
+        return io.papermc.paper.registry.RegistryAccess.registryAccess()
+                .getRegistry(io.papermc.paper.registry.RegistryKey.ENCHANTMENT)
+                .get(NamespacedKey.minecraft(key));
     }
 
     /** 获取某职业的交易商品定义列表（问题6）。 */

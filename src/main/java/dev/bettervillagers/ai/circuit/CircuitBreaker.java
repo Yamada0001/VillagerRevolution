@@ -35,27 +35,28 @@ public final class CircuitBreaker {
     }
 
     /** 是否允许放行新请求（须在调用 provider 前判断）。 */
-    public synchronized boolean allowRequest() {
+    public synchronized boolean shouldRejectRequest() {
+        // true = reject this request; false = allow a request/probe through.
         prune();
         switch (state) {
             case OPEN -> {
                 if (System.currentTimeMillis() - openedAt >= openDurationMs) {
                     state = State.HALF_OPEN;
                     halfOpenProbeInFlight = true;
-                    return true;
+                    return false;
                 }
-                return false;
+                return true;
             }
             case HALF_OPEN -> {
                 // 仅允许一个试探请求在途
                 if (halfOpenProbeInFlight) {
-                    return false;
+                    return true;
                 }
                 halfOpenProbeInFlight = true;
-                return true;
+                return false;
             }
             default -> {
-                return true;
+                return false;
             }
         }
     }
@@ -69,11 +70,6 @@ public final class CircuitBreaker {
     }
 
     /** 只读取可用状态，不申请 HALF_OPEN 探针。 */
-    public synchronized boolean isAvailable() {
-        prune();
-        return state != State.OPEN || System.currentTimeMillis() - openedAt >= openDurationMs;
-    }
-
     public synchronized void recordSuccess() {
         while (window.size() >= MAX_SAMPLES) {
             window.pollFirst();
