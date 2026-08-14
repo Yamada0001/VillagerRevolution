@@ -256,7 +256,7 @@ public final class ProfessionManager {
                 return pool.get(i);
             }
         }
-        return pool.get(pool.size() - 1);
+        return pool.getLast();
     }
 
     /** 构造指定槽位的物品（含 customModelData 与皮革染色，规范 2.3）。 */

@@ -8,9 +8,9 @@ import org.bukkit.configuration.file.FileConfiguration;
  */
 public final class Ver {
 
-    public static final int CONFIG = 5;
+    public static final int CONFIG = 6;
     public static final int PROFESSIONS = 2;
-    public static final int PROMPT = 7;
+    public static final int PROMPT = 8;
     public static final String KEY = "ver";
 
     private Ver() {

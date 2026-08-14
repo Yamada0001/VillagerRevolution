@@ -17,19 +17,26 @@ import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.block.Block;
+import org.bukkit.block.Container;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.entity.Animals;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.IronGolem;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Sheep;
 import org.bukkit.entity.Villager;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.Particle;
 
 import java.util.Map;
+import java.util.List;
+import java.util.EnumSet;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -68,6 +75,8 @@ public final class ProfessionTaskEngine {
     private static final double KING_HOLD_DIST_SQ = 16.0;
     /** 农民开垦判定：水源湿润半径（格）。 */
     private static final int WATER_SEARCH_RADIUS = 4;
+    private static final long NIGHT_START_TICKS = 12500L;
+    private static final long NIGHT_END_TICKS = 23500L;
 
     private final MilitaryTask militaryTask;
     private final BlockInteractionEngine blocks;
@@ -83,15 +92,20 @@ public final class ProfessionTaskEngine {
      * 战斗/逃跑/社交状态下不打断，交由反射层或社交引擎处理。
      */
     public void tickWork(BVillager bv) {
-        LivingEntity self = bv.entity();
+        Villager self = bv.entity();
         if (self == null || self.isDead()) {
             return;
         }
+        long milkCutoff = System.currentTimeMillis() - WORK_INTERVAL_MS * 4;
+        milkCooldown.entrySet().removeIf(entry -> entry.getValue() < milkCutoff);
         VillagerState st = bv.state();
-        // 战斗/逃跑/社交/休息/交易中不打断，交由反射层/战略层/社交引擎处理
+        // 紧急和社交状态不打断，交由反射层/社交引擎处理。
         if (st == VillagerState.COMBAT || st == VillagerState.FLEEING
-                || st == VillagerState.SOCIALIZING || st == VillagerState.RESTING
-                || st == VillagerState.TRADING) {
+                || st == VillagerState.SOCIALIZING || st == VillagerState.TRADING) {
+            return;
+        }
+        Profession prof = bv.profession();
+        if (!MilitaryTask.isMilitary(prof) && handleDailyNeeds(bv, self)) {
             return;
         }
         // 工作任务节流
@@ -101,8 +115,13 @@ public final class ProfessionTaskEngine {
         }
         bv.lastWorkTask(now);
 
-        Profession prof = bv.profession();
         if (prof != Profession.DOCTOR && seekDoctor(bv, self)) {
+            return;
+        }
+        if (joinVillageActivity(bv, self, prof)) {
+            return;
+        }
+        if (manageContainer(bv, self, prof)) {
             return;
         }
         if (MilitaryTask.isMilitary(prof)) {
@@ -123,6 +142,90 @@ public final class ProfessionTaskEngine {
             case KING -> kingCycle(bv, self);
             default -> civilianCycle(bv, self);
         }
+    }
+
+    private boolean handleDailyNeeds(BVillager bv, LivingEntity self) {
+        if (!(self instanceof Villager villager)) {
+            return false;
+        }
+        World world = self.getWorld();
+        long time = world.getTime();
+        boolean night = time >= NIGHT_START_TICKS && time <= NIGHT_END_TICKS;
+        boolean shelterWeather = world.hasStorm();
+        if (!night && !shelterWeather) {
+            if (bv.state() == VillagerState.RESTING) {
+                if (villager.isSleeping()) {
+                    villager.wakeup();
+                }
+                bv.state(VillagerState.IDLE);
+            }
+            eatIfNeeded(villager);
+            return false;
+        }
+
+        Block bed = scanFor(world, self.getLocation(), block -> block.getType().name().endsWith("_BED"));
+        bv.state(VillagerState.RESTING);
+        if (bed != null) {
+            if (withinReach(self.getLocation(), bed.getLocation())) {
+                if (night && !villager.isSleeping()) {
+                    villager.sleep(bed.getLocation());
+                }
+            } else {
+                MovementHelper.moveToward(self, bed.getLocation(), WORK_SPEED);
+            }
+            return true;
+        }
+        if (shelterWeather) {
+            Location shelter = findShelter(world, self.getLocation());
+            if (shelter != null) {
+                MovementHelper.moveToward(self, shelter, WORK_SPEED);
+            }
+        }
+        return true;
+    }
+
+    private void eatIfNeeded(Villager villager) {
+        AttributeInstance maxHealth = maxHealthAttribute(villager);
+        if (maxHealth == null || villager.getHealth() >= maxHealth.getValue() * 0.75) {
+            return;
+        }
+        for (ItemStack stack : villager.getInventory().getContents()) {
+            if (stack == null || stack.getAmount() <= 0 || !isFood(stack.getType())) {
+                continue;
+            }
+            stack.setAmount(stack.getAmount() - 1);
+            villager.setHealth(Math.min(maxHealth.getValue(), villager.getHealth() + maxHealth.getValue() * 0.1));
+            return;
+        }
+    }
+
+    private boolean isFood(Material material) {
+        return switch (material) {
+            case BREAD, CARROT, POTATO, BAKED_POTATO, BEETROOT,
+                    COOKED_BEEF, COOKED_PORKCHOP, COOKED_CHICKEN, COOKED_MUTTON,
+                    COOKED_COD, COOKED_SALMON, APPLE -> true;
+            default -> false;
+        };
+    }
+
+    private Location findShelter(World world, Location origin) {
+        for (int dx = -OP_RADIUS; dx <= OP_RADIUS; dx++) {
+            for (int dz = -OP_RADIUS; dz <= OP_RADIUS; dz++) {
+                if (!sameChunk(origin, origin.getBlockX() + dx, origin.getBlockZ() + dz)) {
+                    continue;
+                }
+                Block feet = world.getBlockAt(origin.getBlockX() + dx, origin.getBlockY(), origin.getBlockZ() + dz);
+                if (!feet.isPassable() || !feet.getRelative(org.bukkit.block.BlockFace.UP).isPassable()) {
+                    continue;
+                }
+                for (int dy = 2; dy <= 5; dy++) {
+                    if (feet.getRelative(0, dy, 0).getType().isSolid()) {
+                        return feet.getLocation();
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     // ==================== 农民：全流程农业生产 ====================
@@ -152,10 +255,15 @@ public final class ProfessionTaskEngine {
         // 2. 播种：寻找空耕地（FARMLAND 上方为 AIR）
         Block plantTarget = scanFor(world, origin, ProfessionTaskEngine::isEmptyFarmland);
         if (plantTarget != null) {
-            Location cropLoc = plantTarget.getLocation();
+            Location cropLoc = plantTarget.getRelative(org.bukkit.block.BlockFace.UP).getLocation();
             if (withinReach(origin, cropLoc)) {
-                Material seed = pickCropMaterial();
-                blocks.placeAt(bv, cropLoc, seed);
+                if (self instanceof Villager villager) {
+                    SeedChoice seed = findSeed(villager);
+                    if (seed != null) {
+                        blocks.placeAt(bv, cropLoc, seed.crop(),
+                                () -> removeOne(villager, seed.seed()));
+                    }
+                }
             } else {
                 MovementHelper.moveToward(self, cropLoc, WORK_SPEED);
             }
@@ -191,7 +299,7 @@ public final class ProfessionTaskEngine {
                 long last = milkCooldown.getOrDefault(animal.getUniqueId(), 0L);
                 if (now - last >= WORK_INTERVAL_MS && removeBucket(villager)) {
                     milkCooldown.put(animal.getUniqueId(), now);
-                    villager.getInventory().addItem(new ItemStack(Material.MILK_BUCKET));
+                    giveItem(villager, new ItemStack(Material.MILK_BUCKET));
                     return;
                 }
             }
@@ -224,7 +332,7 @@ public final class ProfessionTaskEngine {
 
     private boolean seekDoctor(BVillager bv, LivingEntity self) {
         AttributeInstance maxHealth = maxHealthAttribute(self);
-        if (maxHealth == null || self.getHealth() > maxHealth.getValue() * 0.02) {
+        if (maxHealth == null || self.getHealth() > maxHealth.getValue() * 0.4) {
             return false;
         }
         for (Entity nearby : self.getNearbyEntities(OP_RADIUS * 2, OP_RADIUS, OP_RADIUS * 2)) {
@@ -237,7 +345,7 @@ public final class ProfessionTaskEngine {
                 continue;
             }
             MovementHelper.moveToward(self, doctor.getLocation(), WORK_SPEED);
-            bv.state(VillagerState.FLEEING);
+            bv.state(VillagerState.WORKING);
             return true;
         }
         return false;
@@ -251,7 +359,7 @@ public final class ProfessionTaskEngine {
                 continue;
             }
             AttributeInstance maxHealth = maxHealthAttribute(villager);
-            if (maxHealth == null || villager.getHealth() > maxHealth.getValue() * 0.02
+            if (maxHealth == null || villager.getHealth() > maxHealth.getValue() * 0.8
                     || villager.getHealth() >= maxHealth.getValue()) {
                 continue;
             }
@@ -296,6 +404,14 @@ public final class ProfessionTaskEngine {
             }
             // FishingHook 与 PlayerFishEvent 仅支持玩家操作者，Villager 不伪造玩家钓鱼事件。
             self.swingMainHand();
+            if (self instanceof Villager villager && ThreadLocalRandom.current().nextDouble() < 0.35) {
+                Material catchType = switch (ThreadLocalRandom.current().nextInt(10)) {
+                    case 0 -> Material.SALMON;
+                    case 1 -> Material.PUFFERFISH;
+                    default -> Material.COD;
+                };
+                giveItem(villager, new ItemStack(catchType));
+            }
         } else {
             MovementHelper.moveToward(self, water, WORK_SPEED);
         }
@@ -327,9 +443,6 @@ public final class ProfessionTaskEngine {
         if (item != null && item.getType() != Material.AIR && item.getItemMeta() instanceof Damageable damageable
                 && damageable.hasDamage()) {
             item.addUnsafeEnchantment(Enchantment.UNBREAKING, 1);
-            if (self instanceof Villager villager && BV.trade() != null) {
-                villager.setRecipes(BV.trade().generateOffers(bv));
-            }
             self.getWorld().spawnParticle(Particle.ENCHANT, self.getLocation().add(0, 1, 0), 5);
         }
     }
@@ -350,6 +463,9 @@ public final class ProfessionTaskEngine {
 
     private void blacksmithCycle(BVillager bv, LivingEntity self) {
         bv.state(VillagerState.WORKING);
+        if (repairVillagerEquipment(bv, self)) {
+            return;
+        }
         for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
             if (nearby instanceof IronGolem golem && !golem.isDead()) {
                 AttributeInstance maxHealth = maxHealthAttribute(golem);
@@ -372,6 +488,38 @@ public final class ProfessionTaskEngine {
                 return;
             }
         }
+    }
+
+    private boolean repairVillagerEquipment(BVillager blacksmith, LivingEntity self) {
+        double repairAmount = Math.max(0.0, BV.config().raw().getDouble(
+                "gameplay.equipment.blacksmith-repair-per-ingot", 15.0));
+        if (repairAmount <= 0.0 || BV.villagers() == null) {
+            return false;
+        }
+        for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
+            if (!(nearby instanceof Villager villager) || villager == self || villager.isDead()
+                    || !org.bukkit.Bukkit.isOwnedByCurrentRegion(villager)) {
+                continue;
+            }
+            BVillager target = BV.villagers().get(villager.getUniqueId().toString()).orElse(null);
+            if (target == null || target.villageId() != blacksmith.villageId()
+                    || dev.bettervillagers.profession.EquipmentDurability.currentValue(villager) >= 100.0) {
+                continue;
+            }
+            if (!withinReach(self.getLocation(), villager.getLocation())) {
+                MovementHelper.moveToward(self, villager.getLocation(), WORK_SPEED);
+                return true;
+            }
+            if (!consumeIronIngot(self)) {
+                return false;
+            }
+            dev.bettervillagers.profession.EquipmentDurability.repair(
+                    villager, target.professionData(), repairAmount);
+            villager.getWorld().spawnParticle(
+                    Particle.CRIT, villager.getLocation().add(0, 1, 0), 3);
+            return true;
+        }
+        return false;
     }
 
     /** 判断方块是否为可收获的成熟作物。 */
@@ -422,12 +570,18 @@ public final class ProfessionTaskEngine {
         int oz = origin.getBlockZ();
         for (int dx = -OP_RADIUS; dx <= OP_RADIUS; dx++) {
             for (int dz = -OP_RADIUS; dz <= OP_RADIUS; dz++) {
+                if (!sameChunk(origin, ox + dx, oz + dz)) {
+                    continue;
+                }
                 if (world.getBlockAt(ox + dx, oy, oz + dz).getType() != Material.WATER) {
                     continue;
                 }
                 // 水源附近局部寻找可开垦地块（贴合原版耕地湿润半径）
                 for (int lx = -WATER_SEARCH_RADIUS; lx <= WATER_SEARCH_RADIUS; lx++) {
                     for (int lz = -WATER_SEARCH_RADIUS; lz <= WATER_SEARCH_RADIUS; lz++) {
+                        if (!sameChunk(origin, ox + dx + lx, oz + dz + lz)) {
+                            continue;
+                        }
                         Block b = world.getBlockAt(ox + dx + lx, oy, oz + dz + lz);
                         if (isTillable(b)) {
                             return b;
@@ -439,14 +593,25 @@ public final class ProfessionTaskEngine {
         return null;
     }
 
-    /** 随机选择播种的作物类型（贴合原版村民种植多样性）。 */
-    private Material pickCropMaterial() {
-        return switch (ThreadLocalRandom.current().nextInt(4)) {
-            case 0 -> Material.WHEAT;
-            case 1 -> Material.CARROTS;
-            case 2 -> Material.POTATOES;
-            default -> Material.BEETROOTS;
+    /** Selects a real seed/food item already held by the farmer. */
+    private SeedChoice findSeed(Villager villager) {
+        List<SeedChoice> available = new ArrayList<>();
+        SeedChoice[] choices = {
+                new SeedChoice(Material.WHEAT_SEEDS, Material.WHEAT),
+                new SeedChoice(Material.CARROT, Material.CARROTS),
+                new SeedChoice(Material.POTATO, Material.POTATOES),
+                new SeedChoice(Material.BEETROOT_SEEDS, Material.BEETROOTS)
         };
+        for (SeedChoice choice : choices) {
+            if (villager.getInventory().contains(choice.seed())) {
+                available.add(choice);
+            }
+        }
+        return available.isEmpty() ? null
+                : available.get(ThreadLocalRandom.current().nextInt(available.size()));
+    }
+
+    private record SeedChoice(Material seed, Material crop) {
     }
 
     // ==================== 矿工：挖掘矿石 ====================
@@ -491,8 +656,9 @@ public final class ProfessionTaskEngine {
                         || b.getType() == Material.FURNACE);
         if (station != null) {
             if (withinReach(origin, station.getLocation())) {
-                // 到达工作站，执行交互（合成食物，消耗行动点数）
-                blocks.interactAt(bv, station.getLocation(), station.getType());
+                if (blocksInteractAndCook(bv, self, station)) {
+                    self.getWorld().spawnParticle(Particle.SMOKE, station.getLocation().add(0.5, 1, 0.5), 3);
+                }
             } else {
                 MovementHelper.moveToward(self, station.getLocation(), WORK_SPEED);
             }
@@ -505,14 +671,188 @@ public final class ProfessionTaskEngine {
 
     private void butcherCycle(BVillager bv, LivingEntity self) {
         bv.state(VillagerState.WORKING);
-        // 寻找附近的牲畜（牛/猪/羊/鸡），前往处理
-        for (org.bukkit.entity.Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
-            if (nearby instanceof org.bukkit.entity.Animals animal && !nearby.isDead()) {
-                MovementHelper.moveToward(self, animal.getLocation(), WORK_SPEED);
-                return;
+        int breedingFloor = Math.max(2, BV.config().raw().getInt(
+                "gameplay.butcher.minimum-adults-per-species", 2));
+        Map<EntityType, List<Animals>> adultsBySpecies = new java.util.EnumMap<>(EntityType.class);
+        for (Entity nearby : self.getNearbyEntities(OP_RADIUS, OP_RADIUS, OP_RADIUS)) {
+            if (nearby instanceof Animals animal && isLivestock(animal.getType())
+                    && !animal.isDead() && animal.isAdult()) {
+                adultsBySpecies.computeIfAbsent(animal.getType(), ignored -> new ArrayList<>()).add(animal);
             }
         }
+        Animals target = adultsBySpecies.values().stream()
+                .filter(group -> group.size() > breedingFloor)
+                .flatMap(List::stream)
+                .filter(ProfessionTaskEngine::isButcherCandidate)
+                // Prefer animals currently on breeding cooldown while preserving a breeding pair.
+                .min(Comparator.comparing(Animals::canBreed)
+                        .thenComparingDouble(animal -> animal.getLocation()
+                                .distanceSquared(self.getLocation())))
+                .orElse(null);
+        if (target != null) {
+            if (withinReach(self.getLocation(), target.getLocation())) {
+                self.swingMainHand();
+                target.damage(Math.max(1.0, target.getHealth()), self);
+            } else {
+                MovementHelper.moveToward(self, target.getLocation(), WORK_SPEED);
+            }
+            return;
+        }
         wanderInVillage(bv, self, WORK_SPEED);
+    }
+
+    private static boolean isLivestock(EntityType type) {
+        return EnumSet.of(EntityType.COW, EntityType.PIG, EntityType.SHEEP, EntityType.CHICKEN).contains(type);
+    }
+
+    private static boolean isButcherCandidate(Animals animal) {
+        return animal.customName() == null
+                && (!(animal instanceof org.bukkit.entity.Tameable tameable) || !tameable.isTamed())
+                && animal.getLoveModeTicks() <= 0;
+    }
+
+    private boolean blocksInteractAndCook(BVillager bv, LivingEntity self, Block station) {
+        if (!(self instanceof Villager villager)) {
+            return false;
+        }
+        Material[][] recipes = {
+                {Material.BEEF, Material.COOKED_BEEF},
+                {Material.PORKCHOP, Material.COOKED_PORKCHOP},
+                {Material.CHICKEN, Material.COOKED_CHICKEN},
+                {Material.MUTTON, Material.COOKED_MUTTON},
+                {Material.COD, Material.COOKED_COD},
+                {Material.SALMON, Material.COOKED_SALMON},
+                {Material.POTATO, Material.BAKED_POTATO}
+        };
+        for (Material[] recipe : recipes) {
+            if (contains(villager, recipe[0])
+                    && blocks.interactAt(bv, station.getLocation(), station.getType())
+                    && removeOne(villager, recipe[0])) {
+                giveItem(villager, new ItemStack(recipe[1]));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean contains(Villager villager, Material material) {
+        return villager.getInventory().contains(material);
+    }
+
+    private boolean removeOne(Villager villager, Material material) {
+        for (ItemStack stack : villager.getInventory().getContents()) {
+            if (stack != null && stack.getType() == material && stack.getAmount() > 0) {
+                stack.setAmount(stack.getAmount() - 1);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void giveItem(Villager villager, ItemStack item) {
+        villager.getInventory().addItem(item).values().forEach(leftover ->
+                villager.getWorld().dropItemNaturally(villager.getLocation(), leftover));
+    }
+
+    /** Retrieves missing work inputs or deposits role outputs into a nearby live container. */
+    private boolean manageContainer(BVillager bv, Villager villager, Profession profession) {
+        if (!ContainerPolicy.supports(profession)) {
+            return false;
+        }
+        Inventory villagerInventory = villager.getInventory();
+        boolean needsInput = (profession == Profession.FARMER || profession == Profession.CHEF)
+                && !containsMatching(villagerInventory, material -> ContainerPolicy.input(profession, material));
+        int minimumOccupied = Math.clamp(BV.config().raw().getInt(
+                "gameplay.container.minimum-occupied-slots", 6), 1, villagerInventory.getSize());
+        boolean needsDeposit = occupiedSlots(villagerInventory) >= minimumOccupied
+                && containsMatching(villagerInventory,
+                material -> ContainerPolicy.output(profession, material));
+        if (!needsInput && !needsDeposit) {
+            return false;
+        }
+
+        Location origin = villager.getLocation();
+        Block target = scanFor(villager.getWorld(), origin, block ->
+                ContainerPolicy.containerMaterial(block.getType())
+                        && block.getState() instanceof Container
+                        && (BV.regions() == null || !BV.regions().isProtected(block.getLocation())));
+        if (target == null) {
+            return false;
+        }
+        bv.state(VillagerState.WORKING);
+        if (!withinReach(origin, target.getLocation())) {
+            MovementHelper.moveToward(villager, target.getLocation(), WORK_SPEED);
+            return true;
+        }
+
+        int maxStacks = Math.clamp(BV.config().raw().getInt(
+                "gameplay.container.max-stacks-per-operation", 2), 1, 8);
+        final boolean retrieve = needsInput;
+        return blocks.accessContainer(bv, target.getLocation(), container -> retrieve
+                ? transferMatching(container, villagerInventory,
+                material -> ContainerPolicy.input(profession, material), maxStacks)
+                : transferMatching(villagerInventory, container,
+                material -> ContainerPolicy.output(profession, material), maxStacks));
+    }
+
+    private boolean joinVillageActivity(BVillager bv, LivingEntity self, Profession profession) {
+        if (BV.activities() == null || BV.activities().activeFor(bv.villageId(), profession) == null) {
+            return false;
+        }
+        bv.state(VillagerState.WORKING);
+        moveToVillageCenter(bv, self);
+        return true;
+    }
+
+    private static boolean transferMatching(Inventory source, Inventory destination,
+                                            java.util.function.Predicate<Material> filter,
+                                            int maxStacks) {
+        boolean changed = false;
+        int movedStacks = 0;
+        for (int slot = 0; slot < source.getSize() && movedStacks < maxStacks; slot++) {
+            ItemStack stack = source.getItem(slot);
+            if (stack == null || stack.getAmount() <= 0 || !filter.test(stack.getType())) {
+                continue;
+            }
+            int originalAmount = stack.getAmount();
+            ItemStack offered = stack.clone();
+            int left = destination.addItem(offered).values().stream()
+                    .mapToInt(ItemStack::getAmount).sum();
+            int moved = originalAmount - left;
+            if (moved <= 0) {
+                continue;
+            }
+            int remaining = originalAmount - moved;
+            if (remaining <= 0) {
+                source.setItem(slot, null);
+            } else {
+                stack.setAmount(remaining);
+                source.setItem(slot, stack);
+            }
+            changed = true;
+            movedStacks++;
+        }
+        return changed;
+    }
+
+    private static boolean containsMatching(Inventory inventory,
+                                            java.util.function.Predicate<Material> filter) {
+        for (ItemStack stack : inventory.getContents()) {
+            if (stack != null && stack.getAmount() > 0 && filter.test(stack.getType())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int occupiedSlots(Inventory inventory) {
+        int occupied = 0;
+        for (ItemStack stack : inventory.getContents()) {
+            if (stack != null && stack.getAmount() > 0 && !stack.getType().isAir()) {
+                occupied++;
+            }
+        }
+        return occupied;
     }
 
     // ==================== 商人：前往市集交易 ====================
@@ -585,6 +925,9 @@ public final class ProfessionTaskEngine {
         for (int dx = -OP_RADIUS; dx <= OP_RADIUS; dx++) {
             for (int dy = -2; dy <= 2; dy++) {
                 for (int dz = -OP_RADIUS; dz <= OP_RADIUS; dz++) {
+                    if (!sameChunk(origin, ox + dx, oz + dz)) {
+                        continue;
+                    }
                     Block b = world.getBlockAt(ox + dx, oy + dy, oz + dz);
                     if (test.test(b)) {
                         return b;
@@ -593,6 +936,11 @@ public final class ProfessionTaskEngine {
             }
         }
         return null;
+    }
+
+    private static boolean sameChunk(Location origin, int blockX, int blockZ) {
+        return (origin.getBlockX() >> 4) == (blockX >> 4)
+                && (origin.getBlockZ() >> 4) == (blockZ >> 4);
     }
 
     private boolean withinReach(Location a, Location b) {

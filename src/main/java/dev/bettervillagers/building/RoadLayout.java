@@ -65,6 +65,18 @@ final class RoadLayout {
         }
     }
 
+    synchronized void rollbackCommitted(int villageId, Location site, Reservation reservation) {
+        if (site == null || reservation == null) {
+            return;
+        }
+        ArrayDeque<Connector> connectors = open.computeIfAbsent(villageId, ignored -> new ArrayDeque<>());
+        for (Direction direction : outgoing(reservation.incoming.direction(), reservation.piece)) {
+            connectors.remove(new Connector(site.getWorld().getName(), site.getBlockX(),
+                    site.getBlockY(), site.getBlockZ(), direction));
+        }
+        connectors.addFirst(reservation.incoming);
+    }
+
     synchronized List<RoadPortRecord> exportVillage(int villageId) {
         List<RoadPortRecord> result = new ArrayList<>();
         for (Connector connector : open.getOrDefault(villageId, new ArrayDeque<>())) {
@@ -88,6 +100,14 @@ final class RoadLayout {
     synchronized void clear(int villageId) {
         open.remove(villageId);
         reservations.keySet().removeIf(key -> key.startsWith(villageId + ":"));
+    }
+
+    synchronized void mergeVillage(int fromId, int toId) {
+        ArrayDeque<Connector> source = open.remove(fromId);
+        if (source != null && !source.isEmpty()) {
+            open.computeIfAbsent(toId, ignored -> new ArrayDeque<>()).addAll(source);
+        }
+        reservations.keySet().removeIf(key -> key.startsWith(fromId + ":"));
     }
 
     private static ArrayDeque<Connector> initial(Location center) {

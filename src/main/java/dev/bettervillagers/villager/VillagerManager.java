@@ -3,6 +3,7 @@ package dev.bettervillagers.villager;
 import dev.bettervillagers.BV;
 import dev.bettervillagers.i18n.MessageService;
 import dev.bettervillagers.profession.EquipmentApplier;
+import dev.bettervillagers.profession.EquipmentDurability;
 import dev.bettervillagers.profession.Profession;
 import dev.bettervillagers.profession.ProfessionData;
 import dev.bettervillagers.scheduler.ScheduledHandle;
@@ -14,6 +15,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 村民运行期管理器（规范 3.x / 4.2 / 4.5）。
@@ -27,8 +31,14 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class VillagerManager {
 
     private final Map<String, BVillager> online = new ConcurrentHashMap<>();
-    private final Map<String, Long> createdAt = new ConcurrentHashMap<>();
-    private final int kingThreshold;
+    private final Map<String, Long> registrationTokens = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> pendingRegistrationClaims = new ConcurrentHashMap<>();
+    private final Map<String, Profession> pendingInheritedProfessions = new ConcurrentHashMap<>();
+    private volatile int kingThreshold;
+    private final KeyedSerialExecutor persistence;
+    private final AtomicLong registrationSequence = new AtomicLong();
+    private final AtomicInteger tacticalCursor = new AtomicInteger();
+    private final AtomicInteger workCursor = new AtomicInteger();
     private ScheduledHandle tacticalHandle;
     private ScheduledHandle strategicHandle;
     private ScheduledHandle saveHandle;
@@ -36,15 +46,25 @@ public final class VillagerManager {
     private ScheduledHandle combatHandle;
     private ScheduledHandle workHandle;
     private ScheduledHandle socialHandle;
+    private volatile boolean shuttingDown;
 
     public VillagerManager(int kingThreshold) {
+        this(kingThreshold, 4);
+    }
+
+    public VillagerManager(int kingThreshold, int persistenceThreads) {
         this.kingThreshold = kingThreshold;
+        this.persistence = new KeyedSerialExecutor(persistenceThreads);
     }
 
     /** 注册新出现/加载的村民（区块加载或生成时调用）。 */
     public void register(Villager entity) {
         String uuid = entity.getUniqueId().toString();
-        if (online.containsKey(uuid)) {
+        if (shuttingDown || online.containsKey(uuid)) {
+            return;
+        }
+        long token = registrationSequence.incrementAndGet();
+        if (registrationTokens.putIfAbsent(uuid, token) != null) {
             return;
         }
         // 以下值须在主线程/区域线程（本方法调用线程）提取为纯值，
@@ -52,101 +72,290 @@ public final class VillagerManager {
         org.bukkit.Location spawnLoc = entity.getLocation();
         // 生电保护区内不激活 AI（规范 5.2）
         boolean inRedstone = BV.regions() != null && BV.regions().isProtected(spawnLoc);
-        final String worldName = entity.getWorld().getName();
-        final double locX = spawnLoc.getX();
-        final double locY = spawnLoc.getY();
-        final double locZ = spawnLoc.getZ();
-        final int blockX = spawnLoc.getBlockX();
-        final int blockY = spawnLoc.getBlockY();
-        final int blockZ = spawnLoc.getBlockZ();
-        // biome 在主线程预先取好（findOrCreate 异步线程使用）
-        String biomeRaw = "plains";
+        RegistrationSeed seed = captureRegistrationSeed(entity, spawnLoc, inRedstone);
+        persistence.execute(uuid, () -> prepareRegistration(entity, uuid, token, seed));
+    }
+
+    private RegistrationSeed captureRegistrationSeed(Villager entity, org.bukkit.Location spawnLoc,
+                                                       boolean inRedstone) {
+        String biome = "plains";
         try {
-            biomeRaw = spawnLoc.getBlock().getBiome().getKey().getKey().toLowerCase().replace('_', ' ');
+            biome = spawnLoc.getBlock().getBiome().getKey().getKey().toLowerCase().replace('_', ' ');
         } catch (Throwable ignored) {
             // 某些平台/世界类型可能无法获取生物群系
         }
-        final String biome = biomeRaw;
+        return new RegistrationSeed(entity.getWorld().getName(),
+                spawnLoc.getX(), spawnLoc.getY(), spawnLoc.getZ(),
+                spawnLoc.getBlockX(), spawnLoc.getBlockY(), spawnLoc.getBlockZ(), biome, inRedstone);
+    }
 
-        BV.scheduler().runAsync(() -> {
+    /** Registers a bred child with the configured inheritance chance of one parent profession. */
+    public void registerOffspring(Villager child, Villager mother, Villager father) {
+        registerOffspring(child,
+                mother == null ? null : mother.getUniqueId().toString(),
+                father == null ? null : father.getUniqueId().toString());
+    }
+
+    public void registerOffspring(Villager child, String motherUuid, String fatherUuid) {
+        Profession motherProfession = parentProfession(motherUuid);
+        Profession fatherProfession = parentProfession(fatherUuid);
+        double motherRate = inheritanceRate(motherProfession);
+        double fatherRate = inheritanceRate(fatherProfession);
+        Profession inherited = selectInherited(motherProfession, motherRate, fatherProfession, fatherRate,
+                java.util.concurrent.ThreadLocalRandom.current().nextDouble(),
+                java.util.concurrent.ThreadLocalRandom.current().nextDouble());
+        String uuid = child.getUniqueId().toString();
+        pendingInheritedProfessions.put(uuid, inherited);
+        BVillager registered = online.get(uuid);
+        if (registered != null) {
+            pendingInheritedProfessions.remove(uuid);
+            applyInheritedProfession(registered, child, inherited);
+            return;
+        }
+        register(child);
+    }
+
+    private Profession parentProfession(String parentUuid) {
+        if (parentUuid == null) {
+            return null;
+        }
+        BVillager registered = online.get(parentUuid);
+        return registered == null ? null : registered.profession();
+    }
+
+    private double inheritanceRate(Profession profession) {
+        if (profession == null) {
+            return 0.0;
+        }
+        ProfessionData data = BV.professions().data(profession);
+        return data != null && data.enabled() ? data.inheritRate() : 0.0;
+    }
+
+    static Profession selectInherited(Profession first, double firstRate,
+                                      Profession second, double secondRate,
+                                      double parentRoll, double inheritanceRoll) {
+        if (first == null && second == null) {
+            return Profession.CIVILIAN;
+        }
+        Profession candidate;
+        double rate;
+        if (second == null || first != null && parentRoll < 0.5) {
+            candidate = first;
+            rate = firstRate;
+        } else {
+            candidate = second;
+            rate = secondRate;
+        }
+        if (candidate == Profession.KING
+                || inheritanceRoll >= Math.clamp(rate, 0.0, 1.0)) {
+            return Profession.CIVILIAN;
+        }
+        return candidate;
+    }
+
+    private void prepareRegistration(Villager entity, String uuid, long token, RegistrationSeed seed) {
+        try {
             Optional<VillagerData> stored = BV.storage().villagers().find(uuid);
             VillagerData data;
-            Profession prof;
-            ProfessionData pd;
-            boolean locked = false;
-
-            if (stored.isPresent()) {
-                data = stored.get();
-                prof = Profession.parse(data.profession());
-                pd = BV.professions().data(prof);
-                locked = true; // 已有记录视为既定职业
-                BV.ai().memory().load(uuid, data.aiMemoryJson());
+            Profession profession;
+            boolean existing = stored.isPresent();
+            if (existing) {
+                data = stored.orElseThrow();
+                profession = Profession.parse(data.profession());
             } else {
-                // 生成时分配职业（规范 2.2）
-                int villageId = BV.villages().findOrCreate(worldName, blockX, blockY, blockZ, biome);
+                int villageId = BV.villages().findOrCreate(seed.worldName(), seed.blockX(), seed.blockY(),
+                        seed.blockZ(), seed.biome());
                 boolean kingPresent = BV.villages().hasKing(villageId);
                 int population = BV.villages().get(villageId)
                         .map(dev.bettervillagers.village.Village::population).orElse(0);
-                prof = BV.professions().allocate(kingPresent, population, kingThreshold);
-                pd = BV.professions().data(prof);
+                profession = BV.professions().allocate(kingPresent, population, kingThreshold);
+                ProfessionData professionData = BV.professions().data(profession);
                 long now = System.currentTimeMillis();
-                // 问题1：用规则引擎先给一个中世纪名字，AI 异步生成后替换
-                String initialName = VillagerNameGenerator.ruleBasedName();
-                data = new VillagerData(uuid, initialName, prof.id(),
-                        pd.stats().health(), pd.stats().attack(), pd.stats().defense().name(),
-                        worldName, locX, locY, locZ,
-                        villageId, !inRedstone, "[]", now, now);
-                createdAt.put(uuid, now);
-                if (prof == Profession.KING) {
-                    BV.villages().setKing(villageId, uuid);
-                }
-                BV.villages().updatePopulation(villageId, population + 1);
-
-                // 问题1：异步请求 AI 生成更好的中世纪风格名字
-                final String finalUuid = uuid;
-                VillagerNameGenerator.generateAsync(prof, aiName -> {
-                    BVillager bv = online.get(finalUuid);
-                    if (bv != null) {
-                        bv.name(aiName);
-                        // 显示名更新涉及实体 API，须切回实体所属区域线程
-                        Villager ent = bv.entity();
-                        if (ent != null) {
-                            BV.scheduler().runForEntity(ent, () -> updateDisplayName(bv), null);
-                        }
-                    }
-                });
+                data = new VillagerData(uuid, VillagerNameGenerator.ruleBasedName(), profession.id(),
+                        professionData.stats().health(), professionData.stats().attack(),
+                        professionData.stats().defense().name(), seed.worldName(), seed.x(), seed.y(), seed.z(),
+                        villageId, true, "[]", now, now);
             }
-
-            BVillager bv = new BVillager(data, entity, prof, pd);
-            bv.aiEnabled(!inRedstone && data.aiEnabled());
-            online.put(uuid, bv);
-            final boolean isNewVillager = !locked;
-
-            // 修复国王检测：已存在的国王职业村民重新加载时也同步到村庄
-            if (prof == Profession.KING && !BV.villages().hasKing(data.villageId())) {
-                BV.villages().setKing(data.villageId(), uuid);
+            if (!registrationCurrent(uuid, token)) {
+                return;
             }
-            // 切回区域线程应用装备与命名
-            BV.scheduler().runForEntity(entity, () -> {
-                // 设置原版职业映射（让升级机制正常工作，外观由 EquipmentApplier 覆盖）
-                entity.setProfession(dev.bettervillagers.profession.VanillaProfessionMapper.toVanilla(prof));
-                EquipmentApplier.apply(entity, pd);
-                updateDisplayName(bv);
-                // 修复问题3：始终确保村民有交易列表（新村民或已有村民 recipes 为空时都设置）
-                if (BV.trade() != null && !pd.trades().isEmpty()) {
-                    try {
-                        // 已注册村民若 recipes 为空也补充（避免老村民/已加载村民无交易）
-                        if (isNewVillager || entity.getRecipes().isEmpty()) {
-                            entity.setRecipes(BV.trade().generateOffers(bv));
-                        }
-                    } catch (Throwable t) {
-                        BV.plugin().getLogger().warning(
-                                BV.messages().raw("log.tactical-tick-error")
-                                        .replace("{uuid}", uuid).replace("{error}", "setRecipes: " + t));
-                    }
-                }
-            }, null);
+            RegistrationPlan plan = new RegistrationPlan(data, profession, existing, seed.inProtectedRegion());
+            BV.scheduler().runForEntity(entity,
+                    () -> completeRegistration(entity, uuid, token, plan),
+                    () -> registrationTokens.remove(uuid, token));
+        } catch (Throwable t) {
+            registrationTokens.remove(uuid, token);
+            if (!shuttingDown) {
+                BV.plugin().getLogger().warning(BV.messages().raw("log.tactical-tick-error")
+                        .replace("{uuid}", uuid).replace("{error}", "register: " + t));
+            }
+        }
+    }
+
+    private void completeRegistration(Villager entity, String uuid, long token, RegistrationPlan plan) {
+        if (!registrationCurrent(uuid, token) || !entity.isValid() || entity.isDead()) {
+            registrationTokens.remove(uuid, token);
+            pendingInheritedProfessions.remove(uuid);
+            return;
+        }
+        Profession profession = plan.profession();
+        ProfessionData professionData = BV.professions().data(profession);
+        VillagerData data = plan.data();
+        if (!plan.existing()) {
+            Profession inherited = pendingInheritedProfessions.remove(uuid);
+            if (inherited != null) {
+                profession = inherited;
+                professionData = BV.professions().data(profession);
+                data = withProfession(data, profession, professionData);
+            }
+        } else {
+            pendingInheritedProfessions.remove(uuid);
+        }
+        boolean kingClaimed = false;
+        if (!plan.existing()) {
+            kingClaimed = BV.villages().applyPendingVillagerAddition(
+                    data.villageId(), uuid, profession == Profession.KING);
+            if (profession == Profession.KING && !kingClaimed) {
+                int population = BV.villages().get(data.villageId())
+                        .map(dev.bettervillagers.village.Village::population).orElse(0);
+                profession = BV.professions().allocate(true, population, kingThreshold);
+                professionData = BV.professions().data(profession);
+                data = withProfession(data, profession, professionData);
+            }
+        }
+
+        boolean correctedKingConflict = false;
+        if (plan.existing() && profession == Profession.KING
+                && !BV.villages().isKing(data.villageId(), uuid)) {
+            if (!BV.villages().setKing(data.villageId(), uuid)) {
+                int population = BV.villages().get(data.villageId())
+                        .map(dev.bettervillagers.village.Village::population).orElse(0);
+                profession = BV.professions().allocate(true, population, kingThreshold);
+                professionData = BV.professions().data(profession);
+                data = withProfession(data, profession, professionData);
+                correctedKingConflict = true;
+            }
+        }
+
+        BVillager bv = new BVillager(data, entity, profession, professionData);
+        bv.protectedRegionSuspended(plan.inProtectedRegion());
+        if (online.putIfAbsent(uuid, bv) != null) {
+            if (!plan.existing()) {
+                BV.villages().rollbackPendingVillagerAddition(data.villageId(), uuid, kingClaimed);
+            }
+            registrationTokens.remove(uuid, token);
+            return;
+        }
+        if (plan.existing()) {
+            BV.ai().memory().load(uuid, data.aiMemoryJson());
+            if (correctedKingConflict) {
+                VillagerData corrected = bv.toData(data.aiMemoryJson());
+                persistence.execute(uuid, () -> persistSnapshot(corrected));
+            }
+        } else {
+            VillagerData initialSnapshot = bv.toData("[]");
+            boolean finalKingClaimed = kingClaimed;
+            pendingRegistrationClaims.put(uuid, finalKingClaimed);
+            persistence.execute(uuid, () -> persistNewRegistration(initialSnapshot, finalKingClaimed));
+            requestGeneratedName(bv, profession);
+        }
+        if (!plan.inProtectedRegion()) {
+            applyEntityRegistration(entity, bv, profession, professionData, !plan.existing());
+        }
+        if (BV.socialEngine() != null) {
+            BV.socialEngine().settlePending(bv);
+        }
+        registrationTokens.remove(uuid, token);
+    }
+
+    private void persistNewRegistration(VillagerData data, boolean kingClaimed) {
+        try {
+            boolean persistedKing = BV.storage().villagers().insertNewAndAttach(data, kingClaimed);
+            pendingRegistrationClaims.remove(data.uuid());
+            if (kingClaimed && !persistedKing) {
+                BV.villages().clearKingIfOwned(data.villageId(), data.uuid());
+                resolveLostKingClaim(data);
+            }
+            dev.bettervillagers.storage.AtomicFileWriter.deleteFallback(BV.plugin(), data.uuid());
+        } catch (RuntimeException e) {
+            logSaveFailure(data, e, true, kingClaimed);
+        }
+    }
+
+    private void resolveLostKingClaim(VillagerData attempted) {
+        BVillager current = online.get(attempted.uuid());
+        if (current == null || current.profession() != Profession.KING) {
+            return;
+        }
+        int population = BV.villages().get(attempted.villageId())
+                .map(dev.bettervillagers.village.Village::population).orElse(0);
+        Profession replacement = BV.professions().allocate(true, population, kingThreshold);
+        ProfessionData replacementData = BV.professions().data(replacement);
+        current.profession(replacement, replacementData, false);
+        VillagerData corrected = current.toData(attempted.aiMemoryJson());
+        BV.storage().villagers().upsert(corrected);
+        BV.storage().villages().clearKingIfOwned(attempted.villageId(), attempted.uuid());
+        Villager entity = current.entity();
+        if (entity != null) {
+            BV.scheduler().runForEntity(entity,
+                    () -> applyEntityRegistration(entity, current, replacement, replacementData, false), null);
+        }
+    }
+
+    private void requestGeneratedName(BVillager bv, Profession profession) {
+        VillagerNameGenerator.generateAsync(profession, aiName -> {
+            BVillager current = online.get(bv.uuid());
+            if (current != bv || shuttingDown) {
+                return;
+            }
+            bv.name(aiName);
+            Villager entity = bv.entity();
+            if (entity != null) {
+                BV.scheduler().runForEntity(entity, () -> updateDisplayName(bv), null);
+            }
         });
+    }
+
+    private void applyEntityRegistration(Villager entity, BVillager bv, Profession profession,
+                                         ProfessionData professionData, boolean newVillager) {
+        bv.updateEntitySnapshot(entity);
+        entity.setProfession(dev.bettervillagers.profession.VanillaProfessionMapper.toVanilla(profession));
+        EquipmentDurability.applyCurrent(entity, professionData);
+        updateDisplayName(bv);
+        if (BV.trade() != null && !professionData.trades().isEmpty()) {
+            try {
+                if (newVillager || entity.getRecipes().isEmpty()) {
+                    entity.setRecipes(BV.trade().generateOffers(bv));
+                }
+            } catch (Throwable t) {
+                BV.plugin().getLogger().warning(BV.messages().raw("log.tactical-tick-error")
+                        .replace("{uuid}", bv.uuid()).replace("{error}", "setRecipes: " + t));
+            }
+        }
+    }
+
+    private void applyInheritedProfession(BVillager bv, Villager entity, Profession profession) {
+        Profession previous = bv.profession();
+        if (previous == Profession.KING && profession != Profession.KING) {
+            BV.villages().setKing(bv.villageId(), null);
+        }
+        ProfessionData data = BV.professions().data(profession);
+        bv.profession(profession, data, false);
+        EquipmentDurability.reset(entity, data);
+        applyEntityRegistration(entity, bv, profession, data, false);
+        VillagerData snapshot = snapshot(bv);
+        persistence.execute(bv.uuid(), () -> persistSnapshot(snapshot));
+    }
+
+    private boolean registrationCurrent(String uuid, long token) {
+        return !shuttingDown && Long.valueOf(token).equals(registrationTokens.get(uuid));
+    }
+
+    private static VillagerData withProfession(VillagerData data, Profession profession, ProfessionData professionData) {
+        return new VillagerData(data.uuid(), data.name(), profession.id(), professionData.stats().health(),
+                professionData.stats().attack(), professionData.stats().defense().name(), data.locationWorld(),
+                data.locationX(), data.locationY(), data.locationZ(), data.villageId(), data.aiEnabled(),
+                data.aiMemoryJson(), data.createdAt(), data.updatedAt());
     }
 
     /**
@@ -161,20 +370,55 @@ public final class VillagerManager {
         String profDisplay = BV.messages().raw("professions." + bv.profession().id());
         // 显示名格式经 i18n 模板，避免硬编码颜色码（用户规则：禁止硬编码可见文本）
         String displayRaw = BV.messages().raw("display.villager-name-format")
-                .replace("{name}", bv.name()).replace("{profession}", profDisplay);
+                .replace("{name}", MessageService.escapeUntrusted(bv.name())).replace("{profession}", profDisplay);
         Component display = MessageService.deserialize(displayRaw);
         entity.customName(display);
         entity.setCustomNameVisible(true);
     }
 
-    /** 注销村民（区块卸载/死亡/退出时调用），异步保存。 */
+    /** Compatibility alias for an unload that preserves the persistent record. */
     public void unregister(String uuid) {
+        unload(uuid);
+    }
+
+    public void unload(String uuid) {
+        registrationTokens.remove(uuid);
+        pendingInheritedProfessions.remove(uuid);
         BVillager bv = online.remove(uuid);
         if (bv == null) {
             return;
         }
-        createdAt.remove(uuid); // 清理注册时间戳，避免 Map 单调增长（规范 4.x 内存管理）
-        saveOne(bv);
+        VillagerData snapshot = snapshot(bv);
+        persistence.execute(uuid, () -> persistSnapshot(snapshot));
+        clearRuntimeState(uuid);
+    }
+
+    public void removePermanently(String uuid) {
+        registrationTokens.remove(uuid);
+        pendingInheritedProfessions.remove(uuid);
+        BVillager bv = online.remove(uuid);
+        int knownVillageId = bv == null ? -1 : bv.villageId();
+        pendingRegistrationClaims.remove(uuid);
+        clearRuntimeState(uuid);
+        persistence.execute(uuid, () -> {
+            int villageId = knownVillageId;
+            if (villageId <= 0) {
+                villageId = BV.storage().villagers().find(uuid).map(VillagerData::villageId).orElse(-1);
+            }
+            try {
+                BV.storage().villagers().deletePermanently(uuid, villageId);
+                dev.bettervillagers.storage.AtomicFileWriter.deleteFallback(BV.plugin(), uuid);
+                if (villageId > 0) {
+                    BV.villages().applyPersistedVillagerRemoval(villageId, uuid);
+                }
+            } catch (RuntimeException e) {
+                BV.plugin().getLogger().warning(BV.messages().raw("errors.villager-delete")
+                        .replace("{uuid}", uuid).replace("{error}", String.valueOf(e.getMessage())));
+            }
+        });
+    }
+
+    private void clearRuntimeState(String uuid) {
         BV.ai().memory().remove(uuid);
         BV.ai().evictLock(uuid);
         if (BV.behavior() != null) {
@@ -198,7 +442,8 @@ public final class VillagerManager {
     }
 
     /** 启动周期性 AI tick 与定时保存。 */
-    public void startTicking(int tacticalIntervalSec, int strategicIntervalSec, long autoSaveSec) {
+    public synchronized void startTicking(int tacticalIntervalSec, int strategicIntervalSec, long autoSaveSec) {
+        stopTicking();
         long tacticalTicks = Math.max(20L, tacticalIntervalSec * 20L);
         long strategicTicks = Math.max(20L, strategicIntervalSec * 20L);
         long saveTicks = Math.max(200L, autoSaveSec * 20L);
@@ -215,49 +460,75 @@ public final class VillagerManager {
         socialHandle = BV.scheduler().runGlobalTimer(this::tickSocial, 40L, 40L);
     }
 
+    public void reconfigure(int newKingThreshold, int persistenceThreads,
+                            int tacticalIntervalSec, int strategicIntervalSec, long autoSaveSec) {
+        kingThreshold = Math.max(1, newKingThreshold);
+        persistence.reconfigure(persistenceThreads);
+        startTicking(tacticalIntervalSec, strategicIntervalSec, autoSaveSec);
+    }
+
+    private synchronized void stopTicking() {
+        ScheduledHandle[] handles = {tacticalHandle, strategicHandle, saveHandle, cleanupHandle,
+                combatHandle, workHandle, socialHandle};
+        for (ScheduledHandle handle : handles) {
+            if (handle != null) {
+                handle.cancel();
+            }
+        }
+        tacticalHandle = null;
+        strategicHandle = null;
+        saveHandle = null;
+        cleanupHandle = null;
+        combatHandle = null;
+        workHandle = null;
+        socialHandle = null;
+    }
+
     /** 清理死亡/无效村民的内存占用（规范 4.2）。 */
     private void cleanupSweep() {
         for (BVillager bv : online.values()) {
             Villager entity = bv.entity();
             if (entity == null) {
-                unregister(bv.uuid());
+                unload(bv.uuid());
                 continue;
             }
             BV.scheduler().runForEntity(entity, () -> {
                 if (!bv.isAlive()) {
-                    unregister(bv.uuid());
+                    if (entity.isDead()) {
+                        removePermanently(bv.uuid());
+                    } else {
+                        unload(bv.uuid());
+                    }
                 }
-            }, () -> unregister(bv.uuid()));
+            }, () -> unload(bv.uuid()));
         }
     }
 
     /** 战术层 tick：遍历在线村民，委托行为引擎（受最大并发村民限制）。 */
     private void tickTactical() {
-        if (BV.behavior() == null) {
+        if (BV.behavior() == null || !BV.config().feature("ai-behavior")) {
             return;
         }
         int limit = BV.config().maxActiveAiVillagers();
-        int[] scheduled = {0};
-        for (BVillager bv : online.values()) {
-            if (scheduled[0] >= limit) {
-                break;
-            }
+        for (BVillager bv : roundRobin(limit, tacticalCursor)) {
             Villager entity = bv.entity();
             if (entity == null) {
                 continue;
             }
-            scheduled[0]++;
             BV.scheduler().runForEntity(entity, () -> {
+                bv.updateEntitySnapshot(entity);
                 if (!bv.isAlive()) {
                     return;
                 }
                 if (BV.regions() != null) {
                     boolean inRegion = BV.regions().isProtected(entity.getLocation());
-                    if (inRegion && bv.aiEnabled()) {
-                        bv.aiEnabled(false);
+                    boolean wasSuspended = bv.protectedRegionSuspended();
+                    bv.protectedRegionSuspended(inRegion);
+                    if (inRegion) {
                         return;
-                    } else if (!inRegion && !bv.aiEnabled() && !bv.professionLocked()) {
-                        bv.aiEnabled(true);
+                    }
+                    if (wasSuspended) {
+                        applyEntityRegistration(entity, bv, bv.profession(), bv.professionData(), false);
                     }
                 }
                 if (!bv.aiEnabled()) {
@@ -281,7 +552,7 @@ public final class VillagerManager {
      * 此 tick 不受 maxActiveAiVillagers 限制（战斗是反射层，无 AI 成本）。
      */
     private void tickCombat() {
-        if (BV.behavior() == null) {
+        if (BV.behavior() == null || !BV.config().feature("ai-behavior")) {
             return;
         }
         for (BVillager bv : online.values()) {
@@ -290,7 +561,14 @@ public final class VillagerManager {
                 continue;
             }
             BV.scheduler().runForEntity(entity, () -> {
-                if (!bv.isAlive() || !bv.aiEnabled()) {
+                if (!bv.isAlive()) {
+                    return;
+                }
+                bv.updateEntitySnapshot(entity);
+                if (BV.regions() != null) {
+                    bv.protectedRegionSuspended(BV.regions().isProtected(entity.getLocation()));
+                }
+                if (!bv.aiEnabled()) {
                     return;
                 }
                 try {
@@ -318,13 +596,9 @@ public final class VillagerManager {
             return;
         }
         int limit = BV.config().maxActiveAiVillagers();
-        int n = 0;
-        for (BVillager bv : online.values()) {
-            if (!bv.isAlive() || !bv.aiEnabled()) {
+        for (BVillager bv : roundRobin(limit, workCursor)) {
+            if (!bv.aiEnabled()) {
                 continue;
-            }
-            if (n++ >= limit) {
-                break;
             }
             Villager ent = bv.entity();
             if (ent == null) {
@@ -332,6 +606,13 @@ public final class VillagerManager {
             }
             BV.scheduler().runForEntity(ent, () -> {
                 try {
+                    if (!bv.isAlive()) {
+                        return;
+                    }
+                    bv.updateEntitySnapshot(ent);
+                    if (suspendInProtectedRegion(bv, ent)) {
+                        return;
+                    }
                     BV.taskEngine().tickWork(bv);
                 } catch (Throwable t) {
                     BV.plugin().getLogger().warning(
@@ -354,8 +635,9 @@ public final class VillagerManager {
         if (!BV.config().feature("social-interaction")) {
             return;
         }
+        long now = System.currentTimeMillis();
         for (BVillager bv : online.values()) {
-            if (!bv.isAlive() || !bv.aiEnabled()) {
+            if (!bv.aiEnabled() || !BV.socialEngine().shouldSchedule(bv, now)) {
                 continue;
             }
             Villager ent = bv.entity();
@@ -364,6 +646,13 @@ public final class VillagerManager {
             }
             BV.scheduler().runForEntity(ent, () -> {
                 try {
+                    if (!bv.isAlive()) {
+                        return;
+                    }
+                    bv.updateEntitySnapshot(ent);
+                    if (suspendInProtectedRegion(bv, ent)) {
+                        return;
+                    }
                     BV.socialEngine().tickSocial(bv);
                 } catch (Throwable t) {
                     BV.plugin().getLogger().warning(
@@ -376,7 +665,7 @@ public final class VillagerManager {
 
     /** 战略层 tick：仅国王/队长级别。 */
     private void tickStrategic() {
-        if (BV.behavior() == null) {
+        if (BV.behavior() == null || !BV.config().feature("ai-behavior")) {
             return;
         }
         for (BVillager bv : online.values()) {
@@ -388,7 +677,7 @@ public final class VillagerManager {
                 continue;
             }
             BV.scheduler().runForEntity(entity, () -> {
-                if (!bv.aiEnabled() || !bv.isAlive()) {
+                if (!bv.isAlive() || suspendInProtectedRegion(bv, entity) || !bv.aiEnabled()) {
                     return;
                 }
                 try {
@@ -406,10 +695,21 @@ public final class VillagerManager {
     public boolean toggleAI(String uuid) {
         BVillager bv = online.get(uuid);
         if (bv != null) {
-            bv.aiEnabled(!bv.aiEnabled());
-            return bv.aiEnabled();
+            bv.aiEnabled(!bv.configuredAiEnabled());
+            VillagerData snapshot = snapshot(bv);
+            persistence.execute(uuid, () -> persistSnapshot(snapshot));
+            return bv.configuredAiEnabled();
         }
         return false;
+    }
+
+    private static boolean suspendInProtectedRegion(BVillager bv, Villager entity) {
+        if (BV.regions() == null) {
+            return false;
+        }
+        boolean protectedRegion = BV.regions().isProtected(entity.getLocation());
+        bv.protectedRegionSuspended(protectedRegion);
+        return protectedRegion;
     }
 
     /** 重置某村民 AI 记忆。 */
@@ -424,12 +724,21 @@ public final class VillagerManager {
             return false;
         }
         ProfessionData pd = BV.professions().data(prof);
+        Profession previous = bv.profession();
+        if (prof == Profession.KING && previous != Profession.KING
+                && !BV.villages().setKing(bv.villageId(), uuid)) {
+            return false;
+        }
+        if (previous == Profession.KING && prof != Profession.KING
+                && !BV.villages().setKing(bv.villageId(), null)) {
+            return false;
+        }
         bv.profession(prof, pd, true);
         Villager entity = bv.entity();
         if (entity != null) {
             BV.scheduler().runForEntity(entity, () -> {
                 entity.setProfession(dev.bettervillagers.profession.VanillaProfessionMapper.toVanilla(prof));
-                EquipmentApplier.apply(entity, pd);
+                EquipmentDurability.reset(entity, pd);
                 updateDisplayName(bv);
                 if (BV.trade() != null && !pd.trades().isEmpty()) {
                     try {
@@ -442,94 +751,93 @@ public final class VillagerManager {
                 }
             }, null);
         }
-        if (prof == Profession.KING) {
-            BV.villages().setKing(bv.villageId(), uuid);
-        }
+        VillagerData snapshot = snapshot(bv);
+        persistence.execute(uuid, () -> persistSnapshot(snapshot));
         return true;
     }
 
     /* 非管理员转职（受冷却约束，规范 2.2：间隔 ≥ 1 游戏日）。 */
     /** 定时保存全部（规范 4.5 WAL）。 */
     public void saveAll() {
-        BV.scheduler().runAsync(() -> {
-            List<VillagerData> batch = new ArrayList<>();
-            for (BVillager bv : online.values()) {
-                String mem = BV.ai().memory().export(bv.uuid());
-                batch.add(bv.toData(mem, createdAt.getOrDefault(bv.uuid(), System.currentTimeMillis())));
-            }
-            if (!batch.isEmpty()) {
-                try {
-                    BV.storage().villagers().upsertAll(batch);
-                } catch (RuntimeException e) {
-                    BV.plugin().getLogger().severe(
-                            BV.messages().raw("log.batch-save-fail").replace("{error}", e.getMessage()));
-                    for (VillagerData villagerData : batch) {
-                        dev.bettervillagers.storage.AtomicFileWriter.fallbackDump(
-                                BV.plugin(), villagerData.uuid(), villagerData.aiMemoryJson());
-                    }
-                }
-            }
-        });
+        if (shuttingDown) {
+            return;
+        }
+        for (BVillager bv : online.values()) {
+            VillagerData snapshot = snapshot(bv);
+            persistence.execute(bv.uuid(), () -> persistSnapshot(snapshot));
+        }
     }
 
-    private void saveOne(BVillager bv) {
-        BV.scheduler().runAsync(() -> {
-            String mem = BV.ai().memory().export(bv.uuid());
-            VillagerData data = bv.toData(mem, createdAt.getOrDefault(bv.uuid(), System.currentTimeMillis()));
-            try {
+    private VillagerData snapshot(BVillager bv) {
+        return bv.toData(BV.ai().memory().export(bv.uuid()));
+    }
+
+    private void persistSnapshot(VillagerData data) {
+        try {
+            Boolean claimKing = pendingRegistrationClaims.get(data.uuid());
+            if (claimKing == null) {
                 BV.storage().villagers().upsert(data);
-            } catch (RuntimeException e) {
-                BV.plugin().getLogger().warning(
-                        BV.messages().raw("errors.villager-save")
-                                .replace("{uuid}", data.uuid()).replace("{error}", e.getMessage()));
-                dev.bettervillagers.storage.AtomicFileWriter.fallbackDump(
-                        BV.plugin(), data.uuid(), data.aiMemoryJson());
+                if (!Profession.KING.id().equalsIgnoreCase(data.profession())) {
+                    BV.storage().villages().clearKingIfOwned(data.villageId(), data.uuid());
+                }
+            } else {
+                boolean persistedKing = BV.storage().villagers().insertNewAndAttach(data, claimKing);
+                pendingRegistrationClaims.remove(data.uuid(), claimKing);
+                if (claimKing && !persistedKing) {
+                    BV.villages().clearKingIfOwned(data.villageId(), data.uuid());
+                    resolveLostKingClaim(data);
+                }
             }
-        });
+            dev.bettervillagers.storage.AtomicFileWriter.deleteFallback(BV.plugin(), data.uuid());
+        } catch (RuntimeException e) {
+            Boolean claimKing = pendingRegistrationClaims.get(data.uuid());
+            logSaveFailure(data, e, claimKing != null, Boolean.TRUE.equals(claimKing));
+        }
+    }
+
+    private void logSaveFailure(VillagerData data, RuntimeException e,
+                                boolean attachToVillage, boolean claimKing) {
+        BV.plugin().getLogger().warning(BV.messages().raw("errors.villager-save")
+                .replace("{uuid}", data.uuid()).replace("{error}", String.valueOf(e.getMessage())));
+        dev.bettervillagers.storage.AtomicFileWriter.fallbackDump(
+                BV.plugin(), data, attachToVillage, claimKing);
+    }
+
+    private List<BVillager> roundRobin(int limit, AtomicInteger cursor) {
+        List<BVillager> snapshot = new ArrayList<>(online.values());
+        if (snapshot.isEmpty() || limit <= 0) {
+            return List.of();
+        }
+        int count = Math.min(limit, snapshot.size());
+        int start = Math.floorMod(cursor.getAndAdd(count), snapshot.size());
+        List<BVillager> selected = new ArrayList<>(count);
+        for (int offset = 0; offset < snapshot.size() && selected.size() < count; offset++) {
+            BVillager bv = snapshot.get((start + offset) % snapshot.size());
+            if (bv.entity() != null) {
+                selected.add(bv);
+            }
+        }
+        return selected;
     }
 
     public void shutdown() {
-        if (tacticalHandle != null) {
-            tacticalHandle.cancel();
+        shuttingDown = true;
+        registrationTokens.clear();
+        pendingInheritedProfessions.clear();
+        stopTicking();
+        for (BVillager bv : online.values()) {
+            VillagerData snapshot = snapshot(bv);
+            persistence.execute(bv.uuid(), () -> persistSnapshot(snapshot));
         }
-        if (strategicHandle != null) {
-            strategicHandle.cancel();
-        }
-        if (saveHandle != null) {
-            saveHandle.cancel();
-        }
-        if (cleanupHandle != null) {
-            cleanupHandle.cancel();
-        }
-        if (combatHandle != null) {
-            combatHandle.cancel();
-        }
-        if (workHandle != null) {
-            workHandle.cancel();
-        }
-        if (socialHandle != null) {
-            socialHandle.cancel();
-        }
-        saveAllSync();
+        persistence.shutdownAndAwait(30L, TimeUnit.SECONDS);
     }
 
-    private void saveAllSync() {
-        List<VillagerData> batch = new ArrayList<>();
-        for (BVillager bv : online.values()) {
-            String mem = BV.ai().memory().export(bv.uuid());
-            batch.add(bv.toData(mem, createdAt.getOrDefault(bv.uuid(), System.currentTimeMillis())));
-        }
-        if (!batch.isEmpty()) {
-            try {
-                BV.storage().villagers().upsertAll(batch);
-            } catch (RuntimeException e) {
-                BV.plugin().getLogger().severe(
-                        BV.messages().raw("log.batch-save-fail").replace("{error}", e.getMessage()));
-                for (VillagerData villagerData : batch) {
-                    dev.bettervillagers.storage.AtomicFileWriter.fallbackDump(
-                            BV.plugin(), villagerData.uuid(), villagerData.aiMemoryJson());
-                }
-            }
-        }
+    private record RegistrationSeed(String worldName, double x, double y, double z,
+                                    int blockX, int blockY, int blockZ, String biome,
+                                    boolean inProtectedRegion) {
+    }
+
+    private record RegistrationPlan(VillagerData data, Profession profession, boolean existing,
+                                    boolean inProtectedRegion) {
     }
 }

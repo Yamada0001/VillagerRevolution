@@ -10,6 +10,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -110,12 +111,25 @@ public final class RegionSelectionListener implements Listener {
                 BV.messages().send(player, "no-permission");
                 return;
             }
-            if (BV.regions().modify(currentName, newName, null)) {
-                BV.messages().send(player, "region-renamed", "old", currentName, "new", newName);
-            } else {
-                BV.messages().send(player, "region-rename-failed", "name", newName);
-            }
+            BV.regions().modify(currentName, newName, null).whenComplete((modified, failure) ->
+                    BV.scheduler().runForEntity(player, () -> {
+                        if (failure != null) {
+                            BV.messages().send(player, "region-persistence-failed");
+                        } else if (modified) {
+                            BV.messages().send(player, "region-renamed", "old", currentName, "new", newName);
+                        } else {
+                            BV.messages().send(player, "region-rename-failed", "name", newName);
+                        }
+                    }, null));
         }, null);
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        UUID playerId = event.getPlayer().getUniqueId();
+        selections.remove(playerId);
+        pendingRenames.remove(playerId);
+        cancelPreview(playerId);
     }
 
     private boolean canModify(Player player, String name) {

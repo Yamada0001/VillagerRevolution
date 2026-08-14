@@ -15,11 +15,7 @@ public final class DebugMonitor {
         BV.messages().send(sender, "debug-platform", "platform", PlatformDetector.isFolia() ? "Folia" : "Paper");
         int online = BV.villagers() != null ? BV.villagers().count() : 0;
         BV.messages().send(sender, "debug-online-villagers", "count", String.valueOf(online));
-        int activeAi = 0;
-        if (BV.villagers() != null) {
-            activeAi = (int) BV.villagers().all().stream()
-                    .filter(dev.bettervillagers.villager.BVillager::aiEnabled).count();
-        }
+        int activeAi = BV.ai() == null ? 0 : BV.ai().inFlightRequests();
         BV.messages().send(sender, "debug-active-ai", "count", String.valueOf(activeAi));
 
         String state = BV.messages().raw("debug-circuit-disabled");
@@ -30,8 +26,18 @@ public final class DebugMonitor {
 
         String stats = BV.messages().raw("debug-stats-format")
                 .replace("{provider}", BV.ai() != null ? BV.ai().primaryProviderId() : "-")
+                .replace("{requests}", String.valueOf(BV.ai() != null ? BV.ai().providerRequests() : 0))
+                .replace("{latency}", String.format(java.util.Locale.ROOT, "%.1f",
+                        BV.ai() != null ? BV.ai().averageProviderLatencyMillis() : 0.0))
+                .replace("{errors}", String.format(java.util.Locale.ROOT, "%.1f",
+                        BV.ai() != null ? BV.ai().providerErrorRatePercent() : 0.0))
                 .replace("{hits}", String.valueOf(BV.ai() != null ? BV.ai().cache().hits() : 0))
                 .replace("{misses}", String.valueOf(BV.ai() != null ? BV.ai().cache().misses() : 0));
         BV.messages().send(sender, "debug-provider-latency", "stats", stats);
+
+        String regionStats = BV.messages().raw("debug-region-stats-format")
+                .replace("{regions}", String.valueOf(BV.regions() != null ? BV.regions().all().size() : 0))
+                .replace("{jobs}", String.valueOf(BV.building() != null ? BV.building().activeJobCount() : 0));
+        BV.messages().send(sender, "debug-region-load", "stats", regionStats);
     }
 }

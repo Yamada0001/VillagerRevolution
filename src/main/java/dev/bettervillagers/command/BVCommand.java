@@ -28,6 +28,9 @@ import java.util.Optional;
  */
 public final class BVCommand implements CommandExecutor, TabCompleter {
 
+    private static final String ADMIN_PERMISSION = "bettervillagers.admin";
+    private static final String REGION_VIEW_PERMISSION = "bettervillagers.redstone.view";
+
     private final RegionVisualizer visualizer = new RegionVisualizer();
     private final RegionSelectionListener regionSelection;
     private BetterVillagersGui gui;
@@ -61,7 +64,7 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
             return;
         }
         String subcommand = args[0].toLowerCase();
-        if (requiresAdmin(subcommand) && !sender.hasPermission("bettervillagers.admin")) {
+        if (requiresAdmin(subcommand) && !sender.hasPermission(ADMIN_PERMISSION)) {
             BV.messages().send(sender, "no-permission");
             return;
         }
@@ -139,34 +142,35 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
                 return;
             }
             String worldName = parts[3];
-            var world = org.bukkit.Bukkit.getWorld(worldName);
-            if (world == null) {
-                BV.messages().send(sender, "tp-world-not-found", "world", worldName);
-                return;
-            }
             double x = Double.parseDouble(parts[0]);
             double y = Double.parseDouble(parts[1]);
             double z = Double.parseDouble(parts[2]);
-            // 修复问题3：传送到安全落地位置（从目标 Y 向下找实心地面，上方 2 格无遮挡）
-            double safeY = findSafeY(world, (int) x, (int) y, (int) z);
-            org.bukkit.Location dest = new org.bukkit.Location(world, x + 0.5, safeY, z + 0.5);
-            // Folia 兼容：通过实体调度器执行传送
-            BV.scheduler().runForEntity(p, () -> p.teleport(dest), null);
-            BV.messages().send(sender, "tp-success", "loc",
-                    (int) x + "," + (int) safeY + "," + (int) z);
+            BV.scheduler().runGlobal(() -> {
+                var world = org.bukkit.Bukkit.getWorld(worldName);
+                if (world == null) {
+                    respond(sender, () -> BV.messages().send(sender,
+                            "tp-world-not-found", "world", worldName));
+                    return;
+                }
+                org.bukkit.Location probe = new org.bukkit.Location(world, x, y, z);
+                BV.scheduler().runAtRegion(probe, () -> {
+                    double safeY = findSafeY(world, (int) x, (int) y, (int) z);
+                    org.bukkit.Location destination = new org.bukkit.Location(
+                            world, x + 0.5, safeY, z + 0.5);
+                    BV.scheduler().runForEntity(p, () -> p.teleportAsync(destination)
+                            .thenAccept(success -> respond(sender, () -> BV.messages().send(sender,
+                                    success ? "tp-success" : "tp-failed", "loc",
+                                    (int) x + "," + (int) safeY + "," + (int) z))), null);
+                });
+            });
         } catch (Exception e) {
             BV.messages().send(sender, "tp-failed");
         }
     }
 
     private void reload(CommandSender sender) {
-        BV.config().reload();
-        // 规范 6.2：reload 时刷新独立 prompt.yml（提示词模板）
-        BV.messages().loadPrompts();
-        BV.professions().load();
-        // 修复问题8：reload 时重建 AI provider 链，使 provider/api-key/endpoint 立即生效
-        if (BV.ai() != null) {
-            BV.ai().reconfigure(BV.config().ai());
+        if (BV.plugin() instanceof dev.bettervillagers.BetterVillagersPlugin plugin) {
+            plugin.reloadRuntime();
         }
         int count = BV.villagers() != null ? BV.villagers().count() : 0;
         BV.messages().send(sender, "reloaded", "count", String.valueOf(count));
@@ -181,14 +185,21 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
             BV.messages().send(sender, "profession-invalid", "profession", "?");
             return;
         }
-        Profession prof = Profession.parse(args[1]);
+        Optional<Profession> requested = Profession.find(args[1]);
+        if (requested.isEmpty()) {
+            BV.messages().send(sender, "profession-invalid", "profession", args[1]);
+            return;
+        }
+        Profession prof = requested.orElseThrow();
         BVillagerTarget t = resolveTarget(p);
         if (t == null) {
             BV.messages().send(sender, "villager-not-selected");
             return;
         }
-        if (BV.villagers().setProfession(t.villager().getUniqueId().toString(), prof)) {
+        if (BV.villagers().setProfession(t.uuid(), prof)) {
             BV.messages().send(sender, "profession-set", "name", t.name(), "profession", prof.id());
+        } else {
+            BV.messages().send(sender, "profession-change-failed", "profession", prof.id());
         }
     }
 
@@ -235,10 +246,14 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
         }
         RegionSelectionListener.Selection points = selection.get();
         String name = nextRegionName();
-        boolean created = BV.regions().create(name, points.first().getWorld().getName(),
+        BV.regions().create(name, points.first().getWorld().getName(),
                 points.first().getBlockX(), points.first().getBlockY(), points.first().getBlockZ(),
-                points.second().getBlockX(), points.second().getBlockY(), points.second().getBlockZ(), player.getName());
-        BV.messages().send(player, created ? "region-created" : "region-exists", "name", name);
+                points.second().getBlockX(), points.second().getBlockY(), points.second().getBlockZ(), player.getName())
+                .whenComplete((created, failure) -> respond(sender, () ->
+                        BV.messages().send(player,
+                                failure != null ? "region-persistence-failed"
+                                        : created ? "region-created" : "region-exists",
+                                "name", name)));
     }
 
     private void regionRename(CommandSender sender, String[] args) {
@@ -258,11 +273,17 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
             BV.messages().send(player, "no-permission");
             return;
         }
-        if (BV.regions().modify(rename.current(), rename.replacement(), null)) {
-            BV.messages().send(player, "region-renamed", "old", rename.current(), "new", rename.replacement());
-        } else {
-            BV.messages().send(player, "region-rename-failed", "name", rename.replacement());
-        }
+        BV.regions().modify(rename.current(), rename.replacement(), null)
+                .whenComplete((modified, failure) -> respond(sender, () -> {
+                    if (failure != null) {
+                        BV.messages().send(player, "region-persistence-failed");
+                    } else if (modified) {
+                        BV.messages().send(player, "region-renamed", "old", rename.current(),
+                                "new", rename.replacement());
+                    } else {
+                        BV.messages().send(player, "region-rename-failed", "name", rename.replacement());
+                    }
+                }));
     }
 
     private ProtectedRegionName resolveRename(String input) {
@@ -296,14 +317,35 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
             BV.messages().send(sender, "no-permission");
             return;
         }
-        if (BV.regions().delete(args[2])) {
-            BV.messages().send(sender, "region-deleted", "name", args[2]);
+        String name = args[2];
+        BV.regions().delete(name).whenComplete((deleted, failure) -> respond(sender, () -> {
+            if (failure != null) {
+                BV.messages().send(sender, "region-persistence-failed");
+            } else if (deleted) {
+                BV.messages().send(sender, "region-deleted", "name", name);
+            } else {
+                BV.messages().send(sender, "region-not-found", "name", name);
+            }
+        }));
+    }
+
+    private boolean canViewRegions(CommandSender sender) {
+        return sender.hasPermission(ADMIN_PERMISSION) || sender.hasPermission(REGION_VIEW_PERMISSION);
+    }
+
+    private void respond(CommandSender sender, Runnable response) {
+        if (sender instanceof Player player) {
+            BV.scheduler().runForEntity(player, response, null);
         } else {
-            BV.messages().send(sender, "region-not-found", "name", args[2]);
+            BV.scheduler().runGlobal(response);
         }
     }
 
     private void regionList(CommandSender sender) {
+        if (!canViewRegions(sender)) {
+            BV.messages().send(sender, "no-permission");
+            return;
+        }
         var all = BV.regions().all();
         if (all.isEmpty()) {
             BV.messages().send(sender, "region-none");
@@ -320,6 +362,10 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
     }
 
     private void regionInfo(CommandSender sender, String[] args) {
+        if (!canViewRegions(sender)) {
+            BV.messages().send(sender, "no-permission");
+            return;
+        }
         if (args.length < 3) {
             return;
         }
@@ -332,6 +378,10 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
     }
 
     private void regionViz(CommandSender sender, String[] args) {
+        if (!canViewRegions(sender)) {
+            BV.messages().send(sender, "no-permission");
+            return;
+        }
         if (!(sender instanceof Player p)) {
             BV.messages().send(sender, "player-only");
             return;
@@ -388,6 +438,10 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
                     "king", kingName);
             }
             case "verify" -> {
+                if (!sender.hasPermission(ADMIN_PERMISSION)) {
+                    BV.messages().send(sender, "no-permission");
+                    return;
+                }
                 // 手动触发异常村庄数据校验与去重（异步执行，含 DB 写）
                 BV.messages().send(sender, "village-verify-start");
                 BV.scheduler().runAsync(() -> {
@@ -412,7 +466,7 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
             BV.messages().send(sender, "villager-not-selected");
             return;
         }
-        String uuid = t.villager().getUniqueId().toString();
+        String uuid = t.uuid();
         if (args.length < 2) {
             return;
         }
@@ -504,7 +558,8 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
         return null;
     }
 
-    private record BVillagerTarget(Villager villager, String name, String professionId, int villageId) {
+    private record BVillagerTarget(String uuid, String name, String professionId, int villageId,
+                                  dev.bettervillagers.villager.BVillager.PositionSnapshot position) {
     }
 
     private record VillageFacts(String villageName, String kingName, String population) {
@@ -518,26 +573,23 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
         if (sel.isEmpty()) {
             return null;
         }
-        Entity e = org.bukkit.Bukkit.getEntity(sel.get());
-        if (!(e instanceof Villager v) || v.isDead()) {
+        if (BV.villagers() == null) {
+            return null;
+        }
+        Optional<dev.bettervillagers.villager.BVillager> selected =
+                BV.villagers().get(sel.get().toString());
+        if (selected.isEmpty()) {
             PlayerSelection.clear(p.getUniqueId());
             return null;
         }
-        return wrap(v);
-    }
-
-    private BVillagerTarget wrap(Villager v) {
-        String uuid = v.getUniqueId().toString();
-        Optional<dev.bettervillagers.villager.BVillager> opt = BV.villagers() != null
-                ? BV.villagers().get(uuid) : Optional.empty();
-        String name = opt.map(dev.bettervillagers.villager.BVillager::name).orElse(v.getName());
-        if (name.isBlank()) {
+        dev.bettervillagers.villager.BVillager bv = selected.orElseThrow();
+        String name = bv.name();
+        if (name == null || name.isBlank()) {
             name = "Villager";
         }
-        String prof = opt.map(b -> b.profession() != null ? b.profession().id() : "civilian")
-                .orElse(v.getProfession().getKey().getKey().toLowerCase());
-        int vid = opt.map(dev.bettervillagers.villager.BVillager::villageId).orElse(-1);
-        return new BVillagerTarget(v, name, prof.isBlank() ? "civilian" : prof, vid);
+        String prof = bv.profession() == null ? "civilian" : bv.profession().id();
+        return new BVillagerTarget(bv.uuid(), name, prof.isBlank() ? "civilian" : prof,
+                bv.villageId(), bv.lastKnownPosition());
     }
 
     private String playerEquipmentFacts(Player player) {
@@ -571,10 +623,11 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
             unknown = "?";
         }
         int vid = t.villageId();
-        if (vid <= 0 && t.villager() != null && BV.villages() != null) {
-            var loc = t.villager().getLocation();
+        if (vid <= 0 && t.position() != null && BV.villages() != null) {
+            var position = t.position();
             vid = BV.villages().all().stream()
-                    .filter(v -> v.covers(loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ()))
+                    .filter(v -> v.covers(position.world(), (int) Math.floor(position.x()),
+                            (int) Math.floor(position.y()), (int) Math.floor(position.z())))
                     .map(dev.bettervillagers.village.Village::id)
                     .findFirst()
                     .orElse(-1);
@@ -608,7 +661,7 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
     }
 
     private double entityHp(dev.bettervillagers.villager.BVillager bv) {
-        return bv.entity() != null ? bv.entity().getHealth() : 0;
+        return bv.lastKnownHealth();
     }
 
     /**
@@ -637,14 +690,16 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
             out.addAll(List.of("help", "gui", "sel", "region", "yes", "rename", "village"));
-            if (sender.hasPermission("bettervillagers.admin")) {
+            if (sender.hasPermission(ADMIN_PERMISSION)) {
                 out.addAll(List.of("reload", "debug", "profession", "ai", "tp"));
             }
         } else if (args.length == 2) {
             switch (args[0].toLowerCase()) {
                 case "profession" -> out.addAll(java.util.Arrays.stream(Profession.values()).map(Profession::id).toList());
                 case "region" -> {
-                    out.addAll(List.of("list", "info", "viz"));
+                    if (canViewRegions(sender)) {
+                        out.addAll(List.of("list", "info", "viz"));
+                    }
                     if (sender.hasPermission("bettervillagers.redstone.create")) {
                         out.add("create");
                     }
@@ -654,7 +709,7 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
                 }
                 case "village" -> {
                     out.addAll(List.of("info", "king", "stats"));
-                    if (sender.hasPermission("bettervillagers.admin")) {
+                    if (sender.hasPermission(ADMIN_PERMISSION)) {
                         out.add("verify");
                     }
                 }
@@ -664,8 +719,13 @@ public final class BVCommand implements CommandExecutor, TabCompleter {
             }
         } else if (args.length == 3 && args[0].equalsIgnoreCase("region")
                 && List.of("delete", "info", "viz", "visualize").contains(args[1].toLowerCase())) {
-            out.addAll(BV.regions().all().stream()
-                    .map(dev.bettervillagers.redstone.ProtectedRegion::name).toList());
+            String regionAction = args[1].toLowerCase();
+            boolean canCompleteRegionNames = ("delete".equals(regionAction) && sender.hasPermission("bettervillagers.redstone.delete"))
+                    || (List.of("info", "viz", "visualize").contains(regionAction) && canViewRegions(sender));
+            if (canCompleteRegionNames) {
+                out.addAll(BV.regions().all().stream()
+                        .map(dev.bettervillagers.redstone.ProtectedRegion::name).toList());
+            }
         }
         String prefix = args[args.length - 1].toLowerCase();
         return out.stream().filter(s -> s.toLowerCase().startsWith(prefix)).toList();

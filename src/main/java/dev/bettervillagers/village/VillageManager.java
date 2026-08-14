@@ -2,7 +2,6 @@ package dev.bettervillagers.village;
 
 import dev.bettervillagers.BV;
 import dev.bettervillagers.ai.AIContext;
-import dev.bettervillagers.behavior.strategic.StrategicAI;
 
 import java.util.HashMap;
 import java.util.List;
@@ -26,15 +25,19 @@ public final class VillageManager {
 
     private final Map<Integer, Village> villages = new ConcurrentHashMap<>();
     private final AtomicInteger idSeq = new AtomicInteger(0);
-    private final int detectionRadius;
+    private final CompletableFuture<Void> loadFuture = new CompletableFuture<>();
+    private volatile int detectionRadius;
 
     public VillageManager(int detectionRadius) {
         this.detectionRadius = detectionRadius;
     }
 
+    public void detectionRadius(int detectionRadius) {
+        this.detectionRadius = Math.max(1, detectionRadius);
+    }
+
     /** 异步加载全部村庄到内存（启动时调用）。 */
     public CompletableFuture<Void> load() {
-        CompletableFuture<Void> loaded = new CompletableFuture<>();
         BV.scheduler().runAsync(() -> {
             try {
                 List<Village> all = BV.storage().villages().findAll();
@@ -42,12 +45,12 @@ public final class VillageManager {
                     villages.put(v.id(), v);
                     idSeq.accumulateAndGet(v.id(), Math::max);
                 }
-                loaded.complete(null);
+                loadFuture.complete(null);
             } catch (Throwable t) {
-                loaded.completeExceptionally(t);
+                loadFuture.completeExceptionally(t);
             }
         });
-        return loaded;
+        return loadFuture;
     }
 
 
@@ -66,6 +69,14 @@ public final class VillageManager {
      * @param biome 生物群系名（已规整，用于村庄命名；null/空时使用兜底）
      */
     public int findOrCreate(String world, int x, int y, int z, String biome) {
+        // 注册运行在异步线程，可以安全等待启动加载；避免加载尚未完成时重复创建已有村庄。
+        loadFuture.join();
+        synchronized (this) {
+            return findOrCreateLocked(world, x, y, z, biome);
+        }
+    }
+
+    private int findOrCreateLocked(String world, int x, int y, int z, String biome) {
         if (world == null) {
             return -1;
         }
@@ -84,8 +95,8 @@ public final class VillageManager {
         Village created = new Village(tempId, world, x, y, z, detectionRadius, null, 0, null);
         int dbId = BV.storage().villages().insert(created);
         int finalId = dbId > 0 ? dbId : tempId;
-        if (dbId > 0 && dbId > idSeq.get()) {
-            idSeq.set(dbId);
+        if (dbId > 0) {
+            idSeq.accumulateAndGet(dbId, Math::max);
         }
         Village stored = new Village(finalId, world, x, y, z, detectionRadius, null, 0, null);
         villages.put(finalId, stored);
@@ -177,12 +188,7 @@ public final class VillageManager {
         int count = 0;
         if (BV.villagers() != null) {
             for (var bv : BV.villagers().all()) {
-                var ent = bv.entity();
-                if (ent == null) {
-                    continue;
-                }
-                var loc = ent.getLocation();
-                if (v.covers(loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ())) {
+                if (bv.villageId() == villageId) {
                     count++;
                 }
             }
@@ -210,24 +216,12 @@ public final class VillageManager {
                 return opt.get().name();
             }
         }
-        // 2) 扫描村庄范围内的国王职业
+        // 2) 纯查询：按已绑定 villageId 查找，不在读取路径中修改村庄归属。
         for (var bv : BV.villagers().all()) {
             if (bv.profession() != dev.bettervillagers.profession.Profession.KING) {
                 continue;
             }
-            var ent = bv.entity();
-            if (ent == null) {
-                // 无实体时也可用 villageId 匹配
-                if (bv.villageId() == villageId) {
-                    setKing(villageId, bv.uuid());
-                    return bv.name();
-                }
-                continue;
-            }
-            var loc = ent.getLocation();
-            if (v.covers(loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ())
-                    || bv.villageId() == villageId) {
-                setKing(villageId, bv.uuid());
+            if (bv.villageId() == villageId) {
                 return bv.name();
             }
         }
@@ -243,27 +237,22 @@ public final class VillageManager {
             if (bv.profession() != dev.bettervillagers.profession.Profession.BUILDER) {
                 continue;
             }
-            if (bv.villageId() == villageId && bv.isAlive()) {
+            if (bv.villageId() == villageId && bv.entity() != null) {
                 return true;
-            }
-            // 位置兜底：实体在村庄范围内也算
-            var ent = bv.entity();
-            Village v = villages.get(villageId);
-            if (ent != null && v != null) {
-                var loc = ent.getLocation();
-                if (v.covers(loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ())) {
-                    return true;
-                }
             }
         }
         return false;
     }
 
     /** 设置村庄国王（规范 2.2 国王唯一）。 */
-    public void setKing(int villageId, String kingUuid) {
+    public synchronized boolean setKing(int villageId, String kingUuid) {
         Village v = villages.get(villageId);
         if (v == null) {
-            return;
+            return false;
+        }
+        if (kingUuid != null && v.kingUuid() != null && !v.kingUuid().isBlank()
+                && !kingUuid.equals(v.kingUuid())) {
+            return false;
         }
         // 国王唯一性约束：同一国王 UUID 不得绑定多个村庄，否则触发合并去重
         for (Village other : villages.values()) {
@@ -271,14 +260,31 @@ public final class VillageManager {
                 continue;
             }
             if (kingUuid != null && kingUuid.equals(other.kingUuid())) {
-                // 国王归属冲突：把当前村庄并入已有村庄
-                mergeInto(villageId, other.id());
-                return;
+                BV.plugin().getLogger().warning(BV.messages().raw("log.village-king-conflict")
+                        .replace("{king}", kingUuid)
+                        .replace("{other}", String.valueOf(other.id()))
+                        .replace("{village}", String.valueOf(villageId)));
+                return false;
             }
         }
-        villages.put(villageId, new Village(v.id(), v.world(), v.centerX(), v.centerY(), v.centerZ(),
-                v.radius(), kingUuid, v.population(), v.name()));
-        BV.scheduler().runAsync(() -> BV.storage().villages().updateKing(villageId, kingUuid));
+        Village updated = new Village(v.id(), v.world(), v.centerX(), v.centerY(), v.centerZ(),
+                v.radius(), kingUuid, v.population(), v.name());
+        villages.put(villageId, updated);
+        BV.scheduler().runAsync(() -> {
+            try {
+                BV.storage().villages().updateKing(villageId, kingUuid);
+            } catch (RuntimeException e) {
+                villages.replace(villageId, updated, v);
+                BV.plugin().getLogger().warning(BV.messages().raw("errors.village-king-update")
+                        .replace("{error}", String.valueOf(e.getMessage())));
+            }
+        });
+        return true;
+    }
+
+    public boolean isKing(int villageId, String uuid) {
+        Village village = villages.get(villageId);
+        return village != null && uuid != null && uuid.equals(village.kingUuid());
     }
 
     /** 该村庄是否已有国王。 */
@@ -292,9 +298,39 @@ public final class VillageManager {
         if (v == null) {
             return;
         }
-        villages.put(villageId, new Village(v.id(), v.world(), v.centerX(), v.centerY(), v.centerZ(),
-                v.radius(), v.kingUuid(), population, v.name()));
-        BV.scheduler().runAsync(() -> BV.storage().villages().updatePopulation(villageId, population));
+        Village updated = new Village(v.id(), v.world(), v.centerX(), v.centerY(), v.centerZ(),
+                v.radius(), v.kingUuid(), population, v.name());
+        villages.put(villageId, updated);
+        BV.scheduler().runAsync(() -> {
+            try {
+                BV.storage().villages().updatePopulation(villageId, population);
+            } catch (RuntimeException e) {
+                villages.replace(villageId, updated, v);
+                logPersistenceFailure(e);
+            }
+        });
+    }
+
+    /** 新村民首次注册时原子增加人口，数据库侧也使用原子加法避免并发覆盖。 */
+    public void incrementPopulation(int villageId) {
+        Village previous = villages.get(villageId);
+        if (previous == null) {
+            return;
+        }
+        Village updated = new Village(previous.id(), previous.world(), previous.centerX(), previous.centerY(),
+                previous.centerZ(), previous.radius(), previous.kingUuid(), previous.population() + 1, previous.name());
+        if (!villages.replace(villageId, previous, updated)) {
+            incrementPopulation(villageId);
+            return;
+        }
+        BV.scheduler().runAsync(() -> {
+            try {
+                BV.storage().villages().incrementPopulation(villageId);
+            } catch (RuntimeException e) {
+                villages.replace(villageId, updated, previous);
+                logPersistenceFailure(e);
+            }
+        });
     }
 
     /** 设置村庄名字（问题4：AI 命名后更新内存与 DB）。 */
@@ -303,15 +339,62 @@ public final class VillageManager {
         if (v == null || name == null || name.isBlank()) {
             return;
         }
-        villages.put(villageId, new Village(v.id(), v.world(), v.centerX(), v.centerY(), v.centerZ(),
-                v.radius(), v.kingUuid(), v.population(), name));
+        Village updated = new Village(v.id(), v.world(), v.centerX(), v.centerY(), v.centerZ(),
+                v.radius(), v.kingUuid(), v.population(), name);
         BV.scheduler().runAsync(() -> {
             try {
                 BV.storage().villages().updateName(villageId, name);
+                villages.replace(villageId, v, updated);
             } catch (RuntimeException e) {
                 BV.plugin().getLogger().warning(BV.messages().raw("errors.village-name-update").replace("{error}", e.getMessage()));
             }
         });
+    }
+
+    /** Applies the in-memory half of a successful permanent villager removal transaction. */
+    public void applyPersistedVillagerRemoval(int villageId, String uuid) {
+        villages.computeIfPresent(villageId, (ignored, village) -> new Village(
+                village.id(), village.world(), village.centerX(), village.centerY(), village.centerZ(),
+                village.radius(), uuid != null && uuid.equals(village.kingUuid()) ? null : village.kingUuid(),
+                Math.max(0, village.population() - 1), village.name()));
+    }
+
+    /** Reserves the in-memory half of a new-villager transaction. */
+    public synchronized boolean applyPendingVillagerAddition(int villageId, String uuid, boolean claimKing) {
+        Village village = villages.get(villageId);
+        if (village == null) {
+            return false;
+        }
+        boolean kingClaimed = claimKing && (village.kingUuid() == null || village.kingUuid().isBlank());
+        villages.put(villageId, new Village(village.id(), village.world(), village.centerX(), village.centerY(),
+                village.centerZ(), village.radius(), kingClaimed ? uuid : village.kingUuid(),
+                village.population() + 1, village.name()));
+        return kingClaimed;
+    }
+
+    /** Rolls back only the reservation made by {@link #applyPendingVillagerAddition}. */
+    public synchronized void rollbackPendingVillagerAddition(int villageId, String uuid, boolean kingClaimed) {
+        Village village = villages.get(villageId);
+        if (village == null) {
+            return;
+        }
+        String king = kingClaimed && uuid.equals(village.kingUuid()) ? null : village.kingUuid();
+        villages.put(villageId, new Village(village.id(), village.world(), village.centerX(), village.centerY(),
+                village.centerZ(), village.radius(), king, Math.max(0, village.population() - 1), village.name()));
+    }
+
+    public synchronized void clearKingIfOwned(int villageId, String uuid) {
+        Village village = villages.get(villageId);
+        if (village == null || uuid == null || !uuid.equals(village.kingUuid())) {
+            return;
+        }
+        villages.put(villageId, new Village(village.id(), village.world(), village.centerX(), village.centerY(),
+                village.centerZ(), village.radius(), null, village.population(), village.name()));
+    }
+
+    private void logPersistenceFailure(RuntimeException e) {
+        BV.plugin().getLogger().warning(BV.messages().raw("errors.village-population-update")
+                .replace("{error}", String.valueOf(e.getMessage())));
     }
 
     // ==================== 唯一性/去重（修复问题2） ====================
@@ -328,7 +411,7 @@ public final class VillageManager {
      * </ul>
      * 必须在异步线程调用（含 DB 写）。
      */
-    public DedupResult deduplicate() {
+    public synchronized DedupResult deduplicate() {
         List<Village> snapshot = List.copyOf(villages.values());
         int merged = 0;
         int flagged = 0;
@@ -344,15 +427,16 @@ public final class VillageManager {
             } else {
                 int keep = Math.min(existing, v.id());
                 int drop = Math.max(existing, v.id());
-                mergeInto(drop, keep);
-                kingToVillage.put(king, keep);
-                merged++;
+                if (mergeInto(drop, keep)) {
+                    kingToVillage.put(king, keep);
+                    merged++;
+                }
             }
         }
         snapshot = List.copyOf(villages.values());
         Map<String, Village> fingerprint = new HashMap<>();
         for (Village v : snapshot) {
-            String fp = v.world() + "|" + v.kingUuid() + "|" + v.population()
+            String fp = v.world() + "|" + v.kingUuid()
                     + "|" + v.centerX() + "," + v.centerY() + "," + v.centerZ();
             Village prev = fingerprint.get(fp);
             if (prev == null) {
@@ -360,21 +444,22 @@ public final class VillageManager {
             } else {
                 int keep = Math.min(prev.id(), v.id());
                 int drop = Math.max(prev.id(), v.id());
-                mergeInto(drop, keep);
-                fingerprint.put(fp, villages.get(keep));
-                merged++;
-                flagged++;
+                if (mergeInto(drop, keep)) {
+                    fingerprint.put(fp, villages.get(keep));
+                    merged++;
+                    flagged++;
+                }
             }
         }
         return new DedupResult(snapshot.size(), merged, flagged);
     }
 
     /** 把 from 并入 to：先持久化成功，再提交内存态与相关缓存变更。 */
-    private void mergeInto(int fromId, int toId) {
+    private boolean mergeInto(int fromId, int toId) {
         Village from = villages.get(fromId);
         Village to = villages.get(toId);
         if (from == null || to == null) {
-            return;
+            return false;
         }
         int newPop = from.population() + to.population();
         Village merged = new Village(to.id(), to.world(), to.centerX(), to.centerY(), to.centerZ(),
@@ -382,24 +467,20 @@ public final class VillageManager {
                 to.kingUuid() != null ? to.kingUuid() : from.kingUuid(),
                 newPop,
                 to.name() != null ? to.name() : from.name());
-        BV.scheduler().runAsync(() -> {
-            try {
-                BV.storage().villages().updatePopulation(toId, newPop);
-                if (to.kingUuid() == null && from.kingUuid() != null) {
-                    BV.storage().villages().updateKing(toId, from.kingUuid());
-                }
-                BV.storage().villages().delete(fromId);
-                applyMergedVillageState(fromId, toId, merged);
-                BV.plugin().getLogger().info(BV.messages().raw("log.village-merged")
-                        .replace("{from}", String.valueOf(fromId))
-                        .replace("{to}", String.valueOf(toId)));
-            } catch (RuntimeException e) {
-                BV.plugin().getLogger().warning(BV.messages().raw("errors.village-merge")
-                        .replace("{from}", String.valueOf(fromId))
-                        .replace("{to}", String.valueOf(toId))
-                        .replace("{error}", e.getMessage()));
-            }
-        });
+        try {
+            BV.storage().villages().merge(fromId, toId, newPop, merged.kingUuid(), merged.radius());
+            applyMergedVillageState(fromId, toId, merged);
+            BV.plugin().getLogger().info(BV.messages().raw("log.village-merged")
+                    .replace("{from}", String.valueOf(fromId))
+                    .replace("{to}", String.valueOf(toId)));
+            return true;
+        } catch (RuntimeException e) {
+            BV.plugin().getLogger().warning(BV.messages().raw("errors.village-merge")
+                    .replace("{from}", String.valueOf(fromId))
+                    .replace("{to}", String.valueOf(toId))
+                    .replace("{error}", e.getMessage()));
+            return false;
+        }
     }
 
     private void applyMergedVillageState(int fromId, int toId, Village merged) {
@@ -415,12 +496,20 @@ public final class VillageManager {
         // D4 修复：村庄合并后移除废弃村庄的巡逻路线缓存，并重建目标村庄路线（半径可能变更）
         if (BV.patrolRouter() != null) {
             BV.patrolRouter().remove(fromId);
-            BV.patrolRouter().rebuild(toId);
+            BV.patrolRouter().remove(toId);
         }
         // 规范 4.x：清理废弃村庄在各子系统的缓存，避免 stale 条目残留与内存增长
-        StrategicAI.clearVillage(fromId);
+        if (BV.behavior() != null) {
+            BV.behavior().clearVillageState(fromId);
+        }
         if (BV.building() != null) {
-            BV.building().clearVillage(fromId);
+            BV.building().mergeVillage(fromId, toId);
+        }
+        if (BV.diplomacy() != null) {
+            BV.diplomacy().clearVillage(fromId);
+        }
+        if (BV.activities() != null) {
+            BV.activities().clearVillage(fromId);
         }
     }
 

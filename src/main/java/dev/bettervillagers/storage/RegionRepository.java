@@ -26,7 +26,9 @@ public final class RegionRepository {
         try (Connection c = provider.connection();
              PreparedStatement ps = c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             bind(ps, r);
-            ps.executeUpdate();
+            if (ps.executeUpdate() != 1) {
+                throw new SQLException("Protected region does not exist: " + r.id());
+            }
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 if (keys.next()) {
                     return keys.getInt(1);
@@ -52,7 +54,9 @@ public final class RegionRepository {
             ps.setInt(8, r.maxZ());
             ps.setString(9, r.owner());
             ps.setInt(10, r.id());
-            ps.executeUpdate();
+            if (ps.executeUpdate() != 1) {
+                throw new SQLException("Protected region does not exist: " + r.id());
+            }
         } catch (SQLException e) {
             throw new RuntimeException(BV.messages().raw("errors.region-update").replace("{error}", e.getMessage()), e);
         }
@@ -60,9 +64,11 @@ public final class RegionRepository {
 
     public void delete(int id) {
         try (Connection c = provider.connection();
-             PreparedStatement ps = c.prepareStatement("DELETE FROM protected_regions WHERE id=?")) {
+            PreparedStatement ps = c.prepareStatement("DELETE FROM protected_regions WHERE id=?")) {
             ps.setInt(1, id);
-            ps.executeUpdate();
+            if (ps.executeUpdate() != 1) {
+                throw new SQLException("Protected region does not exist: " + id);
+            }
         } catch (SQLException e) {
             throw new RuntimeException(BV.messages().raw("errors.region-delete").replace("{error}", e.getMessage()), e);
         }

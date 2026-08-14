@@ -33,6 +33,23 @@ public final class BuildCache {
         completed.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
+    /** Re-keys completed occupancy after a database-level village merge. */
+    void mergeVillage(int fromId, int toId) {
+        List<BuildLayoutRecord> records = completed.values().stream()
+                .filter(record -> record.villageId() == fromId || record.villageId() == toId)
+                .map(record -> record.villageId() == fromId ? withVillage(record, toId) : record)
+                .toList();
+        clear(fromId);
+        clear(toId);
+        records.forEach(this::restore);
+    }
+
+    private static BuildLayoutRecord withVillage(BuildLayoutRecord record, int villageId) {
+        return new BuildLayoutRecord(villageId, record.world(), record.buildType(), record.templateId(),
+                record.centerX(), record.centerY(), record.centerZ(), record.minX(), record.maxX(),
+                record.minZ(), record.maxZ(), record.rotation(), record.mirror(), record.clusterId());
+    }
+
     boolean tryOccupy(int villageId, BuildType type, String world, int x, int z,
                       int minX, int maxX, int minZ, int maxZ) {
         if (type == null || !type.physical()) {
@@ -91,6 +108,11 @@ public final class BuildCache {
 
     void rememberCompleted(BuildLayoutRecord record) {
         completed.put(record.villageId() + ":" + record.world() + ":" + record.centerX() + ":" + record.centerZ(), record);
+    }
+
+    void forgetCompleted(BuildLayoutRecord record) {
+        completed.remove(record.villageId() + ":" + record.world() + ":"
+                + record.centerX() + ":" + record.centerZ(), record);
     }
 
     List<BuildLayoutRecord> exportVillage(int villageId) {

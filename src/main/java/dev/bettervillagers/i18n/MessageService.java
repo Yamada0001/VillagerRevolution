@@ -181,6 +181,14 @@ public final class MessageService {
         return LEGACY.deserialize(input);
     }
 
+    public static String escapeUntrusted(String input) {
+        if (input == null || input.isEmpty()) {
+            return "";
+        }
+        return input.replace("<", "\\<")
+                .replaceAll("(?i)&(?=[0-9A-FK-ORX#])", "\uFF06");
+    }
+
     /** 解析为带前缀的组件（含占位符替换）。占位符以键值对成对传入。 */
     public Component get(String key, String... pairs) {
         Component body = deserialize(applyPlaceholders(raw(key), pairs));
@@ -205,7 +213,7 @@ public final class MessageService {
     public void broadcastPlayers(String key, String... pairs) {
         Component full = get(key, pairs);
         for (org.bukkit.entity.Player player : org.bukkit.Bukkit.getOnlinePlayers()) {
-            player.sendMessage(full);
+            BV.scheduler().runForEntity(player, () -> player.sendMessage(full), null);
         }
     }
 
@@ -251,7 +259,7 @@ public final class MessageService {
         }
         String out = text;
         for (Map.Entry<String, String> e : map.entrySet()) {
-            out = out.replace("{" + e.getKey() + "}", e.getValue());
+            out = out.replace("{" + e.getKey() + "}", escapeUntrusted(e.getValue()));
         }
         return out;
     }

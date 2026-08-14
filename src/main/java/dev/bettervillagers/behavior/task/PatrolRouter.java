@@ -50,9 +50,7 @@ public final class PatrolRouter {
     public void rebuild(int villageId) {
         List<Location> built = buildRoute(villageId);
         if (built.isEmpty()) {
-            routes.remove(villageId);
-            // D3 修复：空结果不写入缓存，保留旧有效路线或移除空占位
-            routes.remove(villageId);
+            // 世界暂不可用时保留旧有效路线，稍后再重建。
             return;
         }
         routes.put(villageId, built);

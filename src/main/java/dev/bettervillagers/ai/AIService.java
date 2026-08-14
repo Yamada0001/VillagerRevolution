@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * AI 服务编排核心（规范 1.3 异步架构 / 4.5 三级降级链与熔断）。
@@ -38,14 +39,20 @@ public final class AIService {
 
     private volatile AIProvider primary;
     private volatile List<AIProvider> fallbacks;
-    private final CircuitBreaker breaker;
-    private final DecisionCache cache;
+    private volatile CircuitBreaker breaker;
+    private volatile DecisionCache cache;
     private final MemoryStore memory;
-    private final ExecutorService executor;
+    private volatile ExecutorService executor;
+    private volatile int executorThreads;
+    private final List<ExecutorService> retiredExecutors = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** 同一村民串行化锁。 */
     private final Map<String, LockRef> villagerLocks = new ConcurrentHashMap<>();
     private final RateLimiter rateLimiter;
+    private final AtomicInteger inFlightRequests = new AtomicInteger();
+    private final AtomicLong providerRequests = new AtomicLong();
+    private final AtomicLong providerFailures = new AtomicLong();
+    private final AtomicLong providerLatencyNanos = new AtomicLong();
 
     private static final class LockRef {
         private final Object lock = new Object();
@@ -100,13 +107,8 @@ public final class AIService {
         this.retryAttempts = aiCfg.getInt("retry-attempts", 3);
         this.rateLimiter = new RateLimiter(aiCfg.getDouble("requests-per-second", 5.0));
 
-        int concurrency = aiCfg.getInt("max-concurrent-requests", 8);
-        this.executor = Executors.newFixedThreadPool(Math.max(1, concurrency),
-                r -> {
-                    Thread t = new Thread(r, "BV-AI-Worker");
-                    t.setDaemon(true);
-                    return t;
-                });
+        this.executorThreads = Math.max(1, aiCfg.getInt("max-concurrent-requests", 8));
+        this.executor = newExecutor(executorThreads);
 
         String providerName = aiCfg.getString("provider", "openai");
         this.primary = buildProvider(providerName);
@@ -126,14 +128,26 @@ public final class AIService {
                 aiCfg.getInt("cache.max-size", 2000));
         this.memory = new MemoryStore(aiCfg.getInt("memory.max-history", 50));
 
-        boolean cbEnabled = cbCfg.getBoolean("enabled", true);
-        this.breaker = cbEnabled
-                ? new CircuitBreaker(
-                cbCfg.getDouble("failure-threshold-percent", 50),
-                cbCfg.getInt("min-requests", 10),
-                TimeUnit.SECONDS.toMillis(cbCfg.getLong("open-duration", 60)),
-                TimeUnit.SECONDS.toMillis(cbCfg.getLong("window-seconds", 60)))
-                : null;
+        this.breaker = createBreaker(cbCfg);
+    }
+
+    private static ExecutorService newExecutor(int concurrency) {
+        return Executors.newFixedThreadPool(concurrency, r -> {
+            Thread t = new Thread(r, "BV-AI-Worker");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    private static CircuitBreaker createBreaker(ConfigurationSection cfg) {
+        if (cfg == null || !cfg.getBoolean("enabled", true)) {
+            return null;
+        }
+        return new CircuitBreaker(
+                cfg.getDouble("failure-threshold-percent", 50),
+                cfg.getInt("min-requests", 10),
+                TimeUnit.SECONDS.toMillis(cfg.getLong("open-duration", 60)),
+                TimeUnit.SECONDS.toMillis(cfg.getLong("window-seconds", 60)));
     }
 
     /**
@@ -168,6 +182,10 @@ public final class AIService {
      * 无需重启服务器。保留缓存、记忆与熔断器（仅重建 provider 实例）。
      */
     public void reconfigure(ConfigurationSection newAiCfg) {
+        reconfigure(newAiCfg, null);
+    }
+
+    public synchronized void reconfigure(ConfigurationSection newAiCfg, ConfigurationSection newBreakerCfg) {
         this.aiCfg = newAiCfg;
         this.temperature = newAiCfg.getDouble("temperature", 0.7);
         this.maxTokens = newAiCfg.getInt("max-tokens", 500);
@@ -175,14 +193,23 @@ public final class AIService {
         this.retryAttempts = newAiCfg.getInt("retry-attempts", 3);
         this.rateLimiter.configure(newAiCfg.getDouble("requests-per-second", 5.0));
 
-        // 修复问题1：重置熔断器状态，清除旧 provider 的失败历史
-        if (breaker != null) {
+        int newConcurrency = Math.max(1, newAiCfg.getInt("max-concurrent-requests", 8));
+        if (newConcurrency != executorThreads) {
+            ExecutorService previous = executor;
+            executor = newExecutor(newConcurrency);
+            executorThreads = newConcurrency;
+            previous.shutdown();
+            retiredExecutors.add(previous);
+        }
+        if (newBreakerCfg != null) {
+            breaker = createBreaker(newBreakerCfg);
+        } else if (breaker != null) {
             breaker.reset();
         }
-        // 清空决策缓存，避免旧缓存影响新 provider 的行为
-        if (cache != null) {
-            cache.invalidateAll();
-        }
+        cache = new DecisionCache(
+                newAiCfg.getInt("cache.decision-ttl", 300),
+                newAiCfg.getInt("cache.max-size", 2000));
+        memory.reconfigure(newAiCfg.getInt("memory.max-history", 50));
 
         String providerName = newAiCfg.getString("provider", "openai");
         this.primary = buildProvider(providerName);
@@ -248,45 +275,57 @@ public final class AIService {
             return AIResult.ok(dc);
         }
 
-        List<AIProvider> chain = new ArrayList<>();
-        chain.add(primary);
-        chain.addAll(fallbacks);
+        long started = System.nanoTime();
+        providerRequests.incrementAndGet();
+        inFlightRequests.incrementAndGet();
+        try {
+            List<AIProvider> chain = new ArrayList<>();
+            chain.add(primary);
+            chain.addAll(fallbacks);
 
-        // 组装请求（system + memory + user）
-        AIMemory mem = memory.get(ctx.villagerUuid());
-        mem.prune(aiCfg.getInt("memory.context-keep-recent", 12));
-        List<AIRequest.Message> msgs = new ArrayList<>();
-        msgs.add(AIRequest.Message.system(ctx.systemPrompt()));
-        msgs.addAll(mem.messages());
-        msgs.add(AIRequest.Message.user(ctx.userPrompt()));
-        // model 留空，由 provider 使用自身配置的 defaultModel
-        AIRequest request = new AIRequest(msgs, "", temperature, maxTokens, timeout);
+            // 组装请求（system + memory + user）
+            AIMemory mem = memory.get(ctx.villagerUuid());
+            mem.prune(aiCfg.getInt("memory.context-keep-recent", 12));
+            List<AIRequest.Message> msgs = new ArrayList<>();
+            msgs.add(AIRequest.Message.system(ctx.systemPrompt()));
+            msgs.addAll(mem.messages());
+            msgs.add(AIRequest.Message.user(ctx.userPrompt()));
+            // model 留空，由 provider 使用自身配置的 defaultModel
+            AIRequest request = new AIRequest(msgs, "", temperature, maxTokens, timeout);
 
-        for (AIProvider p : chain) {
-            try {
-                String text = retry(p, request);
-                // 成功：记录、缓存、入记忆
-                if (breaker != null) {
-                    breaker.recordSuccess();
+            for (AIProvider p : chain) {
+                try {
+                    String text = retry(p, request);
+                    // 成功：记录、缓存、入记忆
+                    if (breaker != null) {
+                        breaker.recordSuccess();
+                    }
+                    cache.put(cacheKey, text);
+                    mem.append(ctx.userPrompt(), text);
+                    return AIResult.ok(text);
+                } catch (AIException e) {
+                    BV.plugin().getLogger().warning(BV.messages().raw("log.provider-failed")
+                            .replace("{id}", p.id()).replace("{error}", String.valueOf(e.getMessage())));
+                } catch (Throwable t) {
+                    BV.plugin().getLogger().warning(BV.messages().raw("log.provider-error")
+                            .replace("{id}", p.id()).replace("{error}", String.valueOf(t)));
                 }
-                cache.put(cacheKey, text);
-                mem.append(ctx.userPrompt(), text);
-                return AIResult.ok(text);
-            } catch (AIException e) {
-                BV.plugin().getLogger().warning(BV.messages().raw("log.provider-failed")
-                        .replace("{id}", p.id()).replace("{error}", String.valueOf(e.getMessage())));
-            } catch (Throwable t) {
-                BV.plugin().getLogger().warning(BV.messages().raw("log.provider-error")
-                        .replace("{id}", p.id()).replace("{error}", String.valueOf(t)));
             }
+            providerFailures.incrementAndGet();
+            // 全部失败：记录熔断失败
+            if (breaker != null) {
+                breaker.recordFailure();
+            }
+            String fallbackCache = cache.peek(cacheKey);
+            // 规范 4.5：三级降级链末级——规则引擎兜底
+            return fallbackCache != null ? AIResult.degraded(fallbackCache) : AIResult.degraded(ruleBasedDecision(ctx));
+        } catch (RuntimeException | Error failure) {
+            providerFailures.incrementAndGet();
+            throw failure;
+        } finally {
+            providerLatencyNanos.addAndGet(System.nanoTime() - started);
+            inFlightRequests.decrementAndGet();
         }
-        // 全部失败：记录熔断失败
-        if (breaker != null) {
-            breaker.recordFailure();
-        }
-        String fallbackCache = cache.peek(cacheKey);
-        // 规范 4.5：三级降级链末级——规则引擎兜底
-        return fallbackCache != null ? AIResult.degraded(fallbackCache) : AIResult.degraded(ruleBasedDecision(ctx));
     }
 
     /** 规则引擎降级决策（规范 4.5 末级）。 */
@@ -360,14 +399,38 @@ public final class AIService {
         return primary.id();
     }
 
+    public int inFlightRequests() {
+        return inFlightRequests.get();
+    }
+
+    public long providerRequests() {
+        return providerRequests.get();
+    }
+
+    public double averageProviderLatencyMillis() {
+        long requests = providerRequests.get();
+        return requests == 0L ? 0.0 : providerLatencyNanos.get() / 1_000_000.0 / requests;
+    }
+
+    public double providerErrorRatePercent() {
+        long requests = providerRequests.get();
+        return requests == 0L ? 0.0 : providerFailures.get() * 100.0 / requests;
+    }
+
     public void shutdown() {
-        executor.shutdown();
+        List<ExecutorService> executors = new ArrayList<>(retiredExecutors);
+        executors.add(executor);
+        executors.forEach(ExecutorService::shutdown);
         try {
-            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10L);
+            for (ExecutorService service : executors) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0L || !service.awaitTermination(remaining, TimeUnit.NANOSECONDS)) {
+                    service.shutdownNow();
+                }
             }
         } catch (InterruptedException e) {
-            executor.shutdownNow();
+            executors.forEach(ExecutorService::shutdownNow);
             Thread.currentThread().interrupt();
         }
     }

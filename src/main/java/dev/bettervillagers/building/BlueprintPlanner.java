@@ -162,9 +162,8 @@ final class BlueprintPlanner {
         };
         BlockFace b = switch (shape) {
             case NORTH_SOUTH, ASCENDING_NORTH, ASCENDING_SOUTH -> BlockFace.SOUTH;
-            case EAST_WEST, ASCENDING_EAST, ASCENDING_WEST -> BlockFace.WEST;
+            case EAST_WEST, ASCENDING_EAST, ASCENDING_WEST, SOUTH_EAST, SOUTH_WEST -> BlockFace.WEST;
             case NORTH_EAST, NORTH_WEST -> BlockFace.EAST;
-            case SOUTH_EAST, SOUTH_WEST -> BlockFace.WEST;
         };
         a = transformFace(a, placement);
         b = transformFace(b, placement);

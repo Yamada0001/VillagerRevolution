@@ -2,6 +2,7 @@ package dev.bettervillagers.storage;
 
 import dev.bettervillagers.BV;
 import org.bukkit.plugin.Plugin;
+import dev.bettervillagers.villager.VillagerData;
 
 import java.io.IOException;
 import java.nio.file.AccessDeniedException;
@@ -54,6 +55,22 @@ public final class AtomicFileWriter {
         } catch (IOException e) {
             plugin.getLogger().severe(BV.messages().raw("errors.fallback-dump-fail")
                     .replace("{name}", name).replace("{error}", e.getMessage()));
+        }
+    }
+
+    public static void fallbackDump(Plugin plugin, VillagerData data,
+                                    boolean attachToVillage, boolean claimKing) {
+        fallbackDump(plugin, data.uuid(),
+                new VillagerRecoveryRecord(data, attachToVillage, claimKing).toJson());
+    }
+
+    /** Removes a stale recovery snapshot after the corresponding database operation succeeds. */
+    public static void deleteFallback(Plugin plugin, String name) {
+        try {
+            Files.deleteIfExists(plugin.getDataFolder().toPath()
+                    .resolve("recovery").resolve(name + ".json"));
+        } catch (IOException e) {
+            plugin.getLogger().warning("Failed to remove recovery file " + name + ": " + e.getMessage());
         }
     }
 }

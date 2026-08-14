@@ -13,8 +13,7 @@ import java.sql.SQLException;
 /**
  * 数据源提供者（规范 8.x：SQLite 默认 / MySQL 可选，统一 HikariCP 连接池）。
  * <p>
- * SQLite 启用 WAL 模式（规范 4.5 数据安全）；MySQL 优先复用服务端已加载的驱动，
- * 缺失时给出明确错误。
+ * SQLite 启用 WAL 模式（规范 4.5 数据安全）；MySQL Connector/J 随插件产物打包。
  */
 public final class DataSourceProvider {
 
@@ -27,6 +26,17 @@ public final class DataSourceProvider {
         this.dataSource = type.equals("mysql") ? buildMysql(storageCfg) : buildSqlite(storageCfg);
     }
 
+    /** Package-private test fixture using an explicit JDBC URL. */
+    DataSourceProvider(String jdbcUrl) {
+        this.plugin = null;
+        HikariConfig config = new HikariConfig();
+        config.setPoolName("BetterVillagers-Test-" + Integer.toHexString(jdbcUrl.hashCode()));
+        config.setJdbcUrl(jdbcUrl);
+        config.setMaximumPoolSize(2);
+        config.setConnectionInitSql("PRAGMA foreign_keys=ON");
+        this.dataSource = new HikariDataSource(config);
+    }
+
     private HikariDataSource buildSqlite(ConfigurationSection cfg) {
         String file = cfg.getString("sqlite-file", "bettervillagers.db");
         File dataFolder = plugin.getDataFolder();
@@ -34,15 +44,19 @@ public final class DataSourceProvider {
             throw new IllegalStateException("无法创建插件数据目录: " + dataFolder);
         }
         File dbFile = new File(dataFolder, file);
+        return new HikariDataSource(sqliteConfig(dbFile));
+    }
 
+    private HikariConfig sqliteConfig(File dbFile) {
         HikariConfig hc = new HikariConfig();
         hc.setPoolName("BetterVillagers-SQLite");
         hc.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
+        hc.setDriverClassName(org.sqlite.JDBC.class.getName());
         hc.setMaximumPoolSize(2); // SQLite 写串行，池不宜过大
         hc.setConnectionInitSql("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
         hc.addDataSourceProperty("foreign_keys", "true");
         hc.setLeakDetectionThreshold(30_000);
-        return new HikariDataSource(hc);
+        return hc;
     }
 
     private HikariDataSource buildMysql(ConfigurationSection cfg) {
@@ -65,7 +79,7 @@ public final class DataSourceProvider {
         hc.setMaximumPoolSize(10);
         hc.setLeakDetectionThreshold(30_000);
         hc.setConnectionInitSql("SET NAMES utf8mb4");
-        // 服务端若已捆绑 MySQL/MariaDB 驱动则复用，否则抛出可读错误
+        // Connector/J 随插件打包；仍保留 MariaDB 驱动探测以兼容自定义构建。
         hc.setDriverClassName(resolveMysqlDriver());
         return new HikariDataSource(hc);
     }

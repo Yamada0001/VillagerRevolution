@@ -4,7 +4,6 @@ import dev.bettervillagers.BV;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.World;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Monster;
@@ -20,15 +19,25 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class ThreatDetector {
 
-    private static final Map<UUID, Long> ILLEGAL_PLAYERS = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> illegalPlayers = new ConcurrentHashMap<>();
+    private static final long ILLEGAL_PLAYER_TTL_MS = 5 * 60_000L;
+    private static final long SCAN_CACHE_TTL_MS = 250L;
 
     private final double detectionRange;
+    private final Map<UUID, CachedScan> scanCache = new ConcurrentHashMap<>();
 
     public ThreatDetector(double detectionRange) {
         this.detectionRange = detectionRange;
     }
 
     public List<Threat> scan(LivingEntity villager, int myVillageId) {
+        long now = System.currentTimeMillis();
+        UUID uuid = villager.getUniqueId();
+        CachedScan cached = scanCache.get(uuid);
+        if (cached != null && cached.villageId() == myVillageId
+                && now - cached.createdAt() < SCAN_CACHE_TTL_MS) {
+            return cached.threats();
+        }
         List<Threat> threats = new ArrayList<>();
         Location loc = villager.getLocation();
         for (Entity nearby : villager.getNearbyEntities(detectionRange, detectionRange, detectionRange)) {
@@ -50,7 +59,9 @@ public final class ThreatDetector {
             }
         }
         threats.sort(Comparator.comparingDouble(Threat::distance));
-        return threats;
+        List<Threat> result = List.copyOf(threats);
+        scanCache.put(uuid, new CachedScan(now, myVillageId, result));
+        return result;
     }
 
     private Threat checkEnemyVillager(Villager villager, int myVillageId, double dist) {
@@ -75,12 +86,21 @@ public final class ThreatDetector {
         }
     }
 
-    public static void markIllegal(Player player) {
-        ILLEGAL_PLAYERS.put(player.getUniqueId(), System.currentTimeMillis());
+    public void markIllegal(Player player) {
+        illegalPlayers.put(player.getUniqueId(), System.currentTimeMillis());
     }
 
-    private static boolean isIllegal(Player player) {
-        return ILLEGAL_PLAYERS.containsKey(player.getUniqueId());
+    private boolean isIllegal(Player player) {
+        UUID uuid = player.getUniqueId();
+        Long markedAt = illegalPlayers.get(uuid);
+        if (markedAt == null) {
+            return false;
+        }
+        if (System.currentTimeMillis() - markedAt >= ILLEGAL_PLAYER_TTL_MS) {
+            illegalPlayers.remove(uuid, markedAt);
+            return false;
+        }
+        return true;
     }
 
     public LivingEntity nearestEnemy(LivingEntity villager, int myVillageId) {
@@ -98,24 +118,22 @@ public final class ThreatDetector {
                 || mat == Material.FIRE
                 || mat == Material.SOUL_FIRE
                 || mat == Material.CAMPFIRE
-                || mat == Material.SOUL_CAMPFIRE
-                || cliffDanger(villager);
+                || mat == Material.SOUL_CAMPFIRE;
     }
 
-    private boolean cliffDanger(LivingEntity villager) {
-        Location loc = villager.getLocation();
-        World world = loc.getWorld();
-        if (world == null) {
-            return false;
+    public void clear() {
+        illegalPlayers.clear();
+        scanCache.clear();
+    }
+
+    public void clear(String uuid) {
+        try {
+            scanCache.remove(UUID.fromString(uuid));
+        } catch (IllegalArgumentException ignored) {
+            // 非标准 UUID 不会有实体扫描缓存。
         }
-        int x = loc.getBlockX();
-        int y = loc.getBlockY();
-        int z = loc.getBlockZ();
-        for (int dy = 1; dy <= 4; dy++) {
-            if (world.getBlockAt(x, y - dy, z).getType().isSolid()) {
-                return false;
-            }
-        }
-        return true;
+    }
+
+    private record CachedScan(long createdAt, int villageId, List<Threat> threats) {
     }
 }

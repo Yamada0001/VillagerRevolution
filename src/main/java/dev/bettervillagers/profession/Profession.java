@@ -1,6 +1,7 @@
 package dev.bettervillagers.profession;
 
 import java.util.Locale;
+import java.util.Optional;
 
 /** 村民职业（规范 2.1，共 11 种）。 */
 public enum Profession {
@@ -25,13 +26,18 @@ public enum Profession {
     }
 
     public static Profession parse(String s) {
-        if (s == null) {
-            return CIVILIAN;
+        return find(s).orElse(CIVILIAN);
+    }
+
+    /** Exact lookup for user input; unlike {@link #parse(String)}, invalid values are not silently coerced. */
+    public static Optional<Profession> find(String value) {
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
         }
         try {
-            return Profession.valueOf(s.toUpperCase(Locale.ROOT));
+            return Optional.of(Profession.valueOf(value.toUpperCase(Locale.ROOT)));
         } catch (IllegalArgumentException e) {
-            return CIVILIAN;
+            return Optional.empty();
         }
     }
 }

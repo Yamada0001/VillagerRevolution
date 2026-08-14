@@ -30,6 +30,8 @@ public final class BetterVillagersGui implements Listener {
     private static final int NEXT_SLOT = 51;
     private static final int REGION_FIRST_SLOT = 0;
     private static final int REGION_PAGE_SIZE = 45;
+    private static final String ADMIN_PERMISSION = "bettervillagers.admin";
+    private static final String REGION_VIEW_PERMISSION = "bettervillagers.redstone.view";
 
     private final BVCommand command;
     private final RegionSelectionListener regionSelection;
@@ -42,11 +44,12 @@ public final class BetterVillagersGui implements Listener {
     public void openMain(Player player) {
         Inventory inventory = inventory(GuiHolder.Page.MAIN, 0);
         inventory.setItem(10, item(player, Material.VILLAGER_SPAWN_EGG, "gui.main.villager"));
-        inventory.setItem(12, item(player, Material.EMERALD, "gui.main.profession", "bettervillagers.admin"));
-        inventory.setItem(14, item(player, Material.REDSTONE, "gui.main.ai", "bettervillagers.admin"));
+        inventory.setItem(12, item(player, Material.EMERALD, "gui.main.profession", ADMIN_PERMISSION));
+        inventory.setItem(14, item(player, Material.REDSTONE, "gui.main.ai", ADMIN_PERMISSION));
         inventory.setItem(28, item(player, Material.BELL, "gui.main.village"));
-        inventory.setItem(30, item(player, Material.OBSERVER, "gui.main.region"));
-        inventory.setItem(32, item(player, Material.COMPARATOR, "gui.main.system", "bettervillagers.admin"));
+        inventory.setItem(30, item(player, Material.OBSERVER, "gui.main.region",
+                canViewRegions(player) ? null : REGION_VIEW_PERMISSION));
+        inventory.setItem(32, item(player, Material.COMPARATOR, "gui.main.system", ADMIN_PERMISSION));
         inventory.setItem(CLOSE_SLOT, item(player, Material.BARRIER, "gui.common.close"));
         player.openInventory(inventory);
     }
@@ -56,7 +59,7 @@ public final class BetterVillagersGui implements Listener {
         Profession[] professions = Profession.values();
         for (int slot = 0; slot < professions.length; slot++) {
             Profession profession = professions[slot];
-            inventory.setItem(slot, item(player, professionMaterial(profession), "gui.profession.entry", "bettervillagers.admin",
+            inventory.setItem(slot, item(player, professionMaterial(profession), "gui.profession.entry", ADMIN_PERMISSION,
                     "profession", BV.messages().raw("professions." + profession.id())));
         }
         controls(player, inventory);
@@ -85,10 +88,10 @@ public final class BetterVillagersGui implements Listener {
 
     private void openAi(Player player) {
         Inventory inventory = inventory(GuiHolder.Page.AI, 0);
-        inventory.setItem(11, item(player, Material.REDSTONE_TORCH, "gui.ai.toggle", "bettervillagers.admin"));
-        inventory.setItem(13, item(player, Material.MILK_BUCKET, "gui.ai.reset", "bettervillagers.admin"));
-        inventory.setItem(15, item(player, Material.WRITABLE_BOOK, "gui.ai.test", "bettervillagers.admin"));
-        inventory.setItem(31, item(player, Material.PAPER, "gui.ai.chat", "bettervillagers.admin"));
+        inventory.setItem(11, item(player, Material.REDSTONE_TORCH, "gui.ai.toggle", ADMIN_PERMISSION));
+        inventory.setItem(13, item(player, Material.MILK_BUCKET, "gui.ai.reset", ADMIN_PERMISSION));
+        inventory.setItem(15, item(player, Material.WRITABLE_BOOK, "gui.ai.test", ADMIN_PERMISSION));
+        inventory.setItem(31, item(player, Material.PAPER, "gui.ai.chat", ADMIN_PERMISSION));
         controls(player, inventory);
         player.openInventory(inventory);
     }
@@ -113,12 +116,16 @@ public final class BetterVillagersGui implements Listener {
             inventory.setItem(13, item(player, Material.GOLDEN_HELMET, "gui.village.none"));
             inventory.setItem(15, item(player, Material.FILLED_MAP, "gui.village.none"));
         }
-        inventory.setItem(31, item(player, Material.ENDER_EYE, "gui.village.verify", "bettervillagers.admin"));
+        inventory.setItem(31, item(player, Material.ENDER_EYE, "gui.village.verify", ADMIN_PERMISSION));
         controls(player, inventory);
         player.openInventory(inventory);
     }
 
     private void openRegion(Player player, int page) {
+        if (!canViewRegions(player)) {
+            BV.messages().send(player, "no-permission");
+            return;
+        }
         List<ProtectedRegion> regions = BV.regions().all();
         int start = page * REGION_PAGE_SIZE;
         if (start >= regions.size() && page > 0) {
@@ -147,8 +154,8 @@ public final class BetterVillagersGui implements Listener {
     private void openSystem(Player player) {
         Inventory inventory = inventory(GuiHolder.Page.SYSTEM, 0);
         inventory.setItem(11, item(player, Material.COMPASS, "gui.system.select"));
-        inventory.setItem(13, item(player, Material.REDSTONE_LAMP, "gui.system.debug", "bettervillagers.admin"));
-        inventory.setItem(15, item(player, Material.CLOCK, "gui.system.reload", "bettervillagers.admin"));
+        inventory.setItem(13, item(player, Material.REDSTONE_LAMP, "gui.system.debug", ADMIN_PERMISSION));
+        inventory.setItem(15, item(player, Material.CLOCK, "gui.system.reload", ADMIN_PERMISSION));
         controls(player, inventory);
         player.openInventory(inventory);
     }
@@ -164,6 +171,10 @@ public final class BetterVillagersGui implements Listener {
     private void controls(Player player, Inventory inventory) {
         inventory.setItem(BACK_SLOT, item(player, Material.ARROW, "gui.common.back"));
         inventory.setItem(CLOSE_SLOT, item(player, Material.BARRIER, "gui.common.close"));
+    }
+
+    private boolean canViewRegions(Player player) {
+        return player.hasPermission(ADMIN_PERMISSION) || player.hasPermission(REGION_VIEW_PERMISSION);
     }
 
     private ItemStack item(Player player, Material material, String key) {
@@ -185,7 +196,7 @@ public final class BetterVillagersGui implements Listener {
     private String replace(String text, String... pairs) {
         String result = text;
         for (int i = 0; i + 1 < pairs.length; i += 2) {
-            result = result.replace("{" + pairs[i] + "}", pairs[i + 1]);
+            result = result.replace("{" + pairs[i] + "}", MessageService.escapeUntrusted(pairs[i + 1]));
         }
         return result;
     }
@@ -233,21 +244,27 @@ public final class BetterVillagersGui implements Listener {
             case 12 -> openProfession(player);
             case 14 -> openAi(player);
             case 28 -> openVillage(player);
-            case 30 -> openRegion(player, 0);
+            case 30 -> {
+                if (canViewRegions(player)) {
+                    openRegion(player, 0);
+                } else {
+                    BV.messages().send(player, "no-permission");
+                }
+            }
             case 32 -> openSystem(player);
             default -> { }
         }
     }
 
     private void profession(Player player, int slot) {
-        if (!player.hasPermission("bettervillagers.admin") || slot >= Profession.values().length) {
+        if (!player.hasPermission(ADMIN_PERMISSION) || slot >= Profession.values().length) {
             return;
         }
         command.execute(player, new String[]{"profession", Profession.values()[slot].id()});
     }
 
     private void ai(Player player, int slot) {
-        if (!player.hasPermission("bettervillagers.admin")) {
+        if (!player.hasPermission(ADMIN_PERMISSION)) {
             return;
         }
         if (slot == 11) {
@@ -262,13 +279,17 @@ public final class BetterVillagersGui implements Listener {
     }
 
     private void village(Player player, int slot) {
-        if (slot == 31 && player.hasPermission("bettervillagers.admin")) {
+        if (slot == 31 && player.hasPermission(ADMIN_PERMISSION)) {
             player.closeInventory();
             command.execute(player, new String[]{"village", "verify"});
         }
     }
 
     private void region(Player player, int page, InventoryClickEvent event) {
+        if (!canViewRegions(player)) {
+            BV.messages().send(player, "no-permission");
+            return;
+        }
         int slot = event.getRawSlot();
         if (slot == PREVIOUS_SLOT && page > 0) {
             openRegion(player, page - 1);
@@ -304,9 +325,9 @@ public final class BetterVillagersGui implements Listener {
     private void system(Player player, int slot) {
         if (slot == 11) {
             command.execute(player, new String[]{"sel"});
-        } else if (slot == 13 && player.hasPermission("bettervillagers.admin")) {
+        } else if (slot == 13 && player.hasPermission(ADMIN_PERMISSION)) {
             command.execute(player, new String[]{"debug"});
-        } else if (slot == 15 && player.hasPermission("bettervillagers.admin")) {
+        } else if (slot == 15 && player.hasPermission(ADMIN_PERMISSION)) {
             command.execute(player, new String[]{"reload"});
         }
     }

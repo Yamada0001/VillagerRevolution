@@ -73,7 +73,8 @@ public final class TradeService {
             int basePrice = def.minPrice() + (def.maxPrice() > def.minPrice()
                     ? ThreadLocalRandom.current().nextInt(def.maxPrice() - def.minPrice() + 1)
                     : 0);
-            int marketPrice = Math.max(basePrice, (int) Math.round(priceOf(result.getType(), def.amount(), basePrice)));
+            // 暂无全局成交统计时需求取 0；基础价不应伪装成需求量参与市场公式。
+            int marketPrice = Math.max(basePrice, (int) Math.round(priceOf(result.getType(), def.amount(), 0)));
             int price = Math.max(1, (int) Math.floor(marketPrice * (1.0 - discount)));
             // 随机库存（每次重新生成时刷新）
             int maxUses = 8 + ThreadLocalRandom.current().nextInt(8);

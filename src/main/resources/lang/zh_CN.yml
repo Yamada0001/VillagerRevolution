@@ -22,7 +22,7 @@ messages:
     ally: "同盟"
     neutral: "中立"
     enemy: "敌对"
-  diplomacy-changed: "<gradient:#6a11cb:#2575fc>村庄外交关系变更为：</gradient><gradient:#fa709a:#fee140>{rel}</gradient>"
+  diplomacy-changed: "<gradient:#6a11cb:#2575fc>{first} 与 {second} 的外交关系变更为：</gradient><gradient:#fa709a:#fee140>{rel}</gradient>"
 
   # ---------- 命令帮助描述（规范 7 / i18n） ----------
   help-reload: "重载配置"
@@ -49,6 +49,7 @@ messages:
   profession-set: "<gradient:#43e97b:#38f9d7>已将村民 {name} 的职业设为 </gradient><gradient:#fa709a:#fee140>{profession}</gradient><gradient:#43e97b:#38f9d7>。</gradient>"
   profession-locked: "<gradient:#eea2a2:#7ac5d8>村民 {name} 的职业已被管理员锁定。</gradient>"
   profession-invalid: "<gradient:#f093fb:#f5576c>无效的职业：{profession}</gradient>"
+  profession-change-failed: "<gradient:#f093fb:#f5576c>无法指派职业 {profession}：村庄不存在或已有其他国王。</gradient>"
   profession-cooldown: "<gradient:#f093fb:#f5576c>村民 {name} 的转职冷却尚未结束。</gradient>"
 
   # ---------- 村庄 ----------
@@ -89,6 +90,7 @@ messages:
   village-entry-subtitle: "国王：{king}  |  人数：{pop}"
   village-entry-actionbar: "<gradient:#6a11cb:#2575fc>当前位于 </gradient><gradient:#fa709a:#fee140>{village} </gradient><gradient:#6a11cb:#2575fc>村庄范围内</gradient>"
   village-entry-command: "<gradient:#6a11cb:#2575fc>{king}：</gradient><gradient:#e0c3fc:#8ec5fc>{command}</gradient>"
+  village-activity-started: "<gradient:#6a11cb:#2575fc>{village} 开始举行：</gradient><gradient:#fa709a:#fee140>{activity}</gradient>"
   village-entry-unknown: "未知"
   village-verify-start: "<gradient:#eea2a2:#7ac5d8>正在异步校验村庄数据（去重/合并重复实体）...</gradient>"
   village-verify-done: "<gradient:#43e97b:#38f9d7>村庄校验完成：扫描 </gradient><gradient:#fa709a:#fee140>{scanned} </gradient><gradient:#43e97b:#38f9d7>个村庄，合并 </gradient><gradient:#fa709a:#fee140>{merged} </gradient><gradient:#43e97b:#38f9d7>个，标记 </gradient><gradient:#fa709a:#fee140>{flagged} </gradient><gradient:#43e97b:#38f9d7>个异常指纹。</gradient>"
@@ -113,6 +115,7 @@ messages:
   region-rename-empty: "<gradient:#f093fb:#f5576c>保护区名称不能为空。</gradient>"
   region-renamed: "<gradient:#43e97b:#38f9d7>保护区已从 <gradient:#fa709a:#fee140>{old}</gradient><gradient:#43e97b:#38f9d7> 重命名为 <gradient:#fa709a:#fee140>{new}</gradient><gradient:#43e97b:#38f9d7>。</gradient>"
   region-rename-failed: "<gradient:#f093fb:#f5576c>重命名失败：名称 <gradient:#fa709a:#fee140>{name}</gradient><gradient:#f093fb:#f5576c> 已被使用或保护区不存在。</gradient>"
+  region-persistence-failed: "<gradient:#f093fb:#f5576c>保护区保存失败，运行时状态未改变，请检查数据库日志。</gradient>"
   region-rename-usage: "<gradient:#f093fb:#f5576c>用法：/bv rename 当前名字 新名字</gradient>"
 
   # ---------- AI ----------
@@ -141,6 +144,8 @@ messages:
 
   # ---------- 跨职业社交 AI 提示词回退（prompt.yml 缺失时使用） ----------
   ai-prompt:
+    diplomacy-system: "你是中世纪村庄的国王，需要决定与邻近村庄的外交关系。综合双方人口和当前关系，只能回复一个关键词：ALLY / NEUTRAL / ENEMY。和平发展优先 ALLY 或 NEUTRAL，只有明确存在长期资源冲突或安全威胁时才选择 ENEMY。只输出关键词本身。"
+    diplomacy-user: "本村庄: {first}，人口 {first-pop}；邻近村庄: {second}，人口 {second-pop}；当前关系: {relation}。请给出新的外交关系关键词。"
     social-chat-system: "你是 Minecraft 中世纪村庄的村民，正与一位不同职业的邻居在路上相遇并驻足攀谈。只回复一句简短、自然、贴合村庄日常的闲聊（10到20个汉字）。必须直接点名对方，并围绕对方职业应做的职责进行问候或关心。禁止解释你是 AI，禁止输出引号或多余符号。"
     social-chat-user: "村民: {name}（职业: {profession}）遇到了 {partner}（职业: {partner-profession}）。回复必须包含“{partner}”，并问候其作为 {partner-profession} 应做的事情。"
     chat-system: "你是 Minecraft 中世纪村庄里的一位 {profession}，名叫 {name}。村庄名称是「{village}」，国王是「{king}」，人口约 {pop} 人。玩家当前手持和穿戴的真实物品为：{equipment}。回答村庄或玩家装备相关问题时必须且只能使用上述事实；不知道时明确说不知道，禁止编造其它国王名、村名、人数或物品。用符合身份的口吻简短回答（一到两句话，不要解释你是 AI）。"
@@ -170,6 +175,7 @@ messages:
     scheduler-task-error: "调度任务异常: {error}"
     tactical-tick-error: "战术 tick 异常 {uuid}: {error}"
     strategic-tick-error: "战略 tick 异常 {uuid}: {error}"
+    diplomacy-update-error: "村庄外交更新失败 {first}-{second}: {error}"
     batch-save-fail: "批量保存失败，降级落盘: {error}"
     lang-dir-fail: "无法创建 lang 目录: {error}"
     lang-read-fail: "读取语言文件失败: {error}"
@@ -188,6 +194,7 @@ messages:
     recovery-done: "降级补录完成，成功 {success}/{total}"
     recovery-fail: "补录 {file} 失败: {error}"
     village-merged: "村庄合并完成 #{from}→#{to}"
+    village-king-conflict: "国王 {king} 已属于村庄 #{other}，拒绝绑定到村庄 #{village}"
     memory-cleanup: "清理 {count} 个不活跃/死亡村民"
     ai-memory-parse-fail: "AIMemory 解析失败，已忽略损坏记忆: {error}"
     ai-decide-exception: "AI 决策异常: {error}"
@@ -240,7 +247,8 @@ messages:
 
   # ---------- 调试补充 ----------
   debug-circuit-disabled: "已禁用"
-  debug-stats-format: "provider={provider} 命中={hits} 未命中={misses}"
+  debug-stats-format: "provider={provider} 请求={requests} 平均={latency}ms 错误={errors}% 命中={hits} 未命中={misses}"
+  debug-region-stats-format: "保护区={regions} 活跃施工={jobs}"
 
   # ---------- 命令用法占位符（规范 6.2 / i18n） ----------
   usage-profession: "<职业>"

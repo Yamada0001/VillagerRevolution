@@ -36,7 +36,27 @@ public final class EquipmentApplier {
         if (entity == null || data == null) {
             return;
         }
-        // 装备外观层
+        applyEquipment(entity, data);
+        // 战斗属性数值层（规范 0.2：Paper 26.2 属性 key 不带 generic. 前缀）
+        double healthMult = broken ? 0.5 : 1.0;
+        double attackMult = broken ? 0.5 : 1.0;
+        double defenseMult = broken ? 0.5 : 1.0;
+        setAttribute(entity, "max_health", data.stats().health() * healthMult);
+        setAttribute(entity, "attack_damage", data.stats().attack() * attackMult);
+        // 原版低伤害区间每点护甲约 4% 减伤，25 点对应 100% 的配置语义。
+        setAttribute(entity, "armor", data.stats().defense().damageReduction() * 25.0 * defenseMult);
+        try {
+            entity.setHealth(Math.min(data.stats().health(), maxHealth(entity, data.stats().health())));
+        } catch (Exception ignored) {
+            // 容错：设血量失败不影响流程
+        }
+    }
+
+    /** 只补充装备，不修改属性和当前生命值。 */
+    public static void applyEquipment(LivingEntity entity, ProfessionData data) {
+        if (entity == null || data == null) {
+            return;
+        }
         EntityEquipment eq = entity.getEquipment();
         if (eq != null) {
             for (var entry : data.equipment().entrySet()) {
@@ -49,18 +69,6 @@ public final class EquipmentApplier {
                 // 修复问题4：设置掉落概率为 0，确保装备不被丢弃且持续渲染
                 eq.setDropChance(slot, 0.0f);
             }
-        }
-        // 战斗属性数值层（规范 0.2：Paper 26.2 属性 key 不带 generic. 前缀）
-        double healthMult = broken ? 0.5 : 1.0;
-        double attackMult = broken ? 0.5 : 1.0;
-        double defenseMult = broken ? 0.5 : 1.0;
-        setAttribute(entity, "max_health", data.stats().health() * healthMult);
-        setAttribute(entity, "attack_damage", data.stats().attack() * attackMult);
-        setAttribute(entity, "armor", data.stats().defense().damageReduction() * 20.0 * defenseMult);
-        try {
-            entity.setHealth(Math.min(data.stats().health(), maxHealth(entity, data.stats().health())));
-        } catch (Exception ignored) {
-            // 容错：设血量失败不影响流程
         }
     }
 

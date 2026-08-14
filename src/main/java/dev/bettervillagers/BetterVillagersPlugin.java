@@ -18,6 +18,7 @@ import dev.bettervillagers.scheduler.PlatformDetector;
 import dev.bettervillagers.scheduler.SchedulerAdapter;
 import dev.bettervillagers.scheduler.ThreadBoundaryGuard;
 import dev.bettervillagers.storage.StorageService;
+import dev.bettervillagers.storage.VillagerRecoveryRecord;
 import dev.bettervillagers.trade.TradeService;
 import dev.bettervillagers.village.VillageManager;
 import dev.bettervillagers.villager.VillagerData;
@@ -30,6 +31,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * BetterVillagers 插件主类（规范 0.x / 全局生命周期）。
@@ -40,6 +44,8 @@ import java.util.Optional;
 public final class BetterVillagersPlugin extends JavaPlugin {
 
     private RegionSelectionListener regionSelection;
+    private CompletableFuture<Void> bootstrapFuture;
+    private volatile boolean ready;
 
     @Override
     public void onEnable() {
@@ -67,11 +73,8 @@ public final class BetterVillagersPlugin extends JavaPlugin {
         StorageService storage = new StorageService(this, config.storage());
         BV.storage(storage);
 
-        // 降级文件启动补录（规范 4.5：DB 写失败时本地落盘，重启后回放）
+        // 降级文件会在全部服务装配后、运行态缓存加载前回放。
         Path recoveryDir = getDataFolder().toPath().resolve("recovery");
-        if (Files.isDirectory(recoveryDir)) {
-            scheduler.runAsync(() -> recoverFallbackFiles(recoveryDir));
-        }
 
         // 4. AI 系统（规范 1.x：异步、熔断、降级链）
         AIService ai = new AIService(config.ai(), config.circuitBreaker());
@@ -84,12 +87,12 @@ public final class BetterVillagersPlugin extends JavaPlugin {
         // 6. 村庄 / 生电保护区（规范 2.2 / 5.x）
         VillageManager villages = new VillageManager(config.village().getInt("detection-radius", 64));
         BV.villages(villages);
-        villages.load();
         // 村庄外交系统（问题5）
         BV.diplomacy(new dev.bettervillagers.village.DiplomacyManager());
+        BV.activities(new dev.bettervillagers.village.VillageActivityManager());
 
         RegionManager regions = new RegionManager(config.redstoneMode().getBoolean("enabled", true));
-        regions.load();
+        regions.configure(config.redstoneMode());
         BV.regions(regions);
 
         // 7. 社会系统（规范 3.3 / 3.4）
@@ -97,8 +100,7 @@ public final class BetterVillagersPlugin extends JavaPlugin {
                 config.performance().getInt("trade-calculation-cache", 300),
                 config.performance().getInt("trade-cache-max-size", 2000),
                 config.performance().getInt("trade-quantize-step", 8)));
-        BV.building(new BuildingManager());
-        BV.building().restoreLayouts();
+        BV.building(new BuildingManager(config.performance().getInt("async-threads", 4)));
 
         // 8. 行为引擎（规范 3.1：三层决策）
         BehaviorEngine behavior = new BehaviorEngine(
@@ -115,14 +117,34 @@ public final class BetterVillagersPlugin extends JavaPlugin {
         dev.bettervillagers.behavior.task.MilitaryTask militaryTask =
                 new dev.bettervillagers.behavior.task.MilitaryTask(patrolRouter, behavior.threatDetector());
         BV.taskEngine(new dev.bettervillagers.behavior.task.ProfessionTaskEngine(militaryTask, behavior.blocks()));
-        BV.socialEngine(new dev.bettervillagers.behavior.social.SocialEngine());
+        BV.socialEngine(new dev.bettervillagers.behavior.social.SocialEngine(
+                config.performance().getInt("async-threads", 4)));
 
         // 9. 村民运行期管理器（规范 3.x / 4.5）
-        VillagerManager villagers = new VillagerManager(config.village().getInt("king-spawn-population", 6));
+        VillagerManager villagers = new VillagerManager(
+                config.village().getInt("king-spawn-population", 6),
+                config.performance().getInt("async-threads", 4));
         BV.villagers(villagers);
         BV.debug(new DebugMonitor());
 
-        // 10. 命令与事件
+        // 10. 关键运行数据加载完成前不开放命令、事件或 AI，避免空缓存保护窗口。
+        bootstrapFuture = recoverFallbackFilesAsync(recoveryDir).thenCompose(ignored -> CompletableFuture.allOf(
+                villages.load(), regions.load(), BV.diplomacy().load(), BV.building().restoreLayouts()));
+        bootstrapFuture.whenComplete((ignored, error) -> scheduler.runGlobal(() -> {
+            if (error != null) {
+                getLogger().log(java.util.logging.Level.SEVERE,
+                        "BetterVillagers bootstrap failed; disabling plugin", unwrap(error));
+                Bukkit.getPluginManager().disablePlugin(this);
+                return;
+            }
+            finishEnable(config, messages, villagers);
+        }));
+    }
+
+    private void finishEnable(ConfigManager config, MessageService messages, VillagerManager villagers) {
+        if (ready || !isEnabled()) {
+            return;
+        }
         regionSelection = new RegionSelectionListener();
         BVCommand cmd = new BVCommand(regionSelection);
         BetterVillagersGui gui = new BetterVillagersGui(cmd, regionSelection);
@@ -136,30 +158,131 @@ public final class BetterVillagersPlugin extends JavaPlugin {
         Bukkit.getPluginManager().registerEvents(new VillagerListener(), this);
         Bukkit.getPluginManager().registerEvents(regionSelection, this);
         Bukkit.getPluginManager().registerEvents(gui, this);
+        villagers.startTicking(config.aiUpdateInterval(), config.strategicInterval(), config.autoSaveInterval());
+        ready = true;
+        registerAlreadyLoadedVillagers();
 
-        // 11. 启动周期任务 + 注册已加载村民
-        villagers.startTicking(
-                config.aiUpdateInterval(),
-                config.strategicInterval(),
-                config.autoSaveInterval());
-        // 已加载区块中的村民由 ChunkLoadEvent 注册，避免在 Folia 全局线程跨区域遍历世界实体。
-
-        // 12. 启动广播（控制台与玩家各输出一次，避免 Server.sendMessage 重复打控制台）
         String platform = PlatformDetector.isFolia() ? "Folia" : "Paper";
         messages.sendConsoleRaw("startup", "platform", platform);
         messages.broadcastPlayers("startup", "platform", platform);
     }
 
+    private void registerAlreadyLoadedVillagers() {
+        for (org.bukkit.World world : Bukkit.getWorlds()) {
+            for (org.bukkit.Chunk chunk : world.getLoadedChunks()) {
+                int chunkX = chunk.getX();
+                int chunkZ = chunk.getZ();
+                org.bukkit.Location regionKey = new org.bukkit.Location(
+                        world, (chunkX << 4) + 8, world.getMinHeight(), (chunkZ << 4) + 8);
+                BV.scheduler().runAtRegion(regionKey, () -> {
+                    if (!world.isChunkLoaded(chunkX, chunkZ) || BV.villagers() == null) {
+                        return;
+                    }
+                    for (org.bukkit.entity.Entity entity : world.getChunkAt(chunkX, chunkZ).getEntities()) {
+                        if (entity instanceof org.bukkit.entity.Villager villager) {
+                            BV.villagers().register(villager);
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    private static Throwable unwrap(Throwable error) {
+        Throwable current = error;
+        while ((current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException) && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    /** Applies all hot-reloadable configuration and replaces config-bound runtime components. */
+    public synchronized void reloadRuntime() {
+        ConfigManager config = BV.config();
+        config.reload();
+        BV.messages().load(config.language());
+        BV.messages().loadPrompts();
+        BV.professions().load();
+        BV.guard(new ThreadBoundaryGuard(this, config.debugMode()));
+
+        if (BV.ai() != null) {
+            BV.ai().reconfigure(config.ai(), config.circuitBreaker());
+        }
+        if (BV.regions() != null) {
+            BV.regions().enabled(config.redstoneMode().getBoolean("enabled", true));
+            BV.regions().configure(config.redstoneMode());
+        }
+        if (BV.villages() != null) {
+            BV.villages().detectionRadius(config.village().getInt("detection-radius", 64));
+        }
+        if (BV.diplomacy() != null) {
+            BV.diplomacy().configure();
+        }
+        if (BV.activities() != null) {
+            BV.activities().configure();
+        }
+        BV.trade(new TradeService(
+                config.performance().getInt("trade-calculation-cache", 300),
+                config.performance().getInt("trade-cache-max-size", 2000),
+                config.performance().getInt("trade-quantize-step", 8)));
+
+        int asyncThreads = config.performance().getInt("async-threads", 4);
+        if (BV.building() != null) {
+            BV.building().reconfigureAsyncThreads(asyncThreads);
+            if (!config.feature("autonomous-building")) {
+                BV.building().cancelAll();
+            }
+        }
+        if (BV.socialEngine() != null) {
+            BV.socialEngine().reconfigureAsyncThreads(asyncThreads);
+        }
+
+        BehaviorEngine previousBehavior = BV.behavior();
+        dev.bettervillagers.behavior.task.PatrolRouter previousPatrol = BV.patrolRouter();
+        BehaviorEngine behavior = new BehaviorEngine(
+                config.pathfindingRange(), config.aiUpdateInterval(), config.strategicInterval(),
+                config.performance().getInt("block-operation-cooldown", 10));
+        dev.bettervillagers.behavior.task.PatrolRouter patrol =
+                new dev.bettervillagers.behavior.task.PatrolRouter();
+        dev.bettervillagers.behavior.task.MilitaryTask military =
+                new dev.bettervillagers.behavior.task.MilitaryTask(patrol, behavior.threatDetector());
+        BV.behavior(behavior);
+        BV.patrolRouter(patrol);
+        BV.taskEngine(new dev.bettervillagers.behavior.task.ProfessionTaskEngine(
+                military, behavior.blocks()));
+        if (previousBehavior != null) {
+            previousBehavior.shutdown();
+        }
+        if (previousPatrol != null) {
+            previousPatrol.clear();
+        }
+
+        if (BV.villagers() != null) {
+            BV.villagers().reconfigure(
+                    config.village().getInt("king-spawn-population", 6), asyncThreads,
+                    config.aiUpdateInterval(), config.strategicInterval(), config.autoSaveInterval());
+        }
+    }
+
     @Override
     public void onDisable() {
-        // 先停止周期 tick 并同步保存；此时 AI 与存储服务仍可用。
-        VillagerManager villagers = BV.villagers();
-        if (villagers != null) {
-            villagers.shutdown();
+        ready = false;
+        if (bootstrapFuture != null && !bootstrapFuture.isDone()) {
+            try {
+                bootstrapFuture.get(10L, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // Running load tasks are bounded; shutdown below closes remaining services safely.
+            }
         }
+        // 先停止新交易并冲刷交易日志，再保存村民状态；存储服务此时仍保持可用。
         dev.bettervillagers.behavior.social.SocialEngine social = BV.socialEngine();
         if (social != null) {
             social.shutdown();
+        }
+        VillagerManager villagers = BV.villagers();
+        if (villagers != null) {
+            villagers.shutdown();
         }
         // 取消所有进行中的施工任务（须在全局服务置 null 之前，避免回调 NPE）
         BuildingManager building = BV.building();
@@ -169,6 +292,12 @@ public final class BetterVillagersPlugin extends JavaPlugin {
         BehaviorEngine behavior = BV.behavior();
         if (behavior != null) {
             behavior.shutdown();
+        }
+        if (BV.diplomacy() != null) {
+            BV.diplomacy().shutdown();
+        }
+        if (BV.activities() != null) {
+            BV.activities().shutdown();
         }
         AIService ai = BV.ai();
         if (ai != null) {
@@ -195,7 +324,23 @@ public final class BetterVillagersPlugin extends JavaPlugin {
         BV.shutdown();
     }
 
-    /** 降级文件补录（规范 4.5：将上一次 DB 写失败落盘的 AI 记忆回放到数据库）。 */
+    private CompletableFuture<Void> recoverFallbackFilesAsync(Path recoveryDir) {
+        if (!Files.isDirectory(recoveryDir)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        BV.scheduler().runAsync(() -> {
+            try {
+                recoverFallbackFiles(recoveryDir);
+                future.complete(null);
+            } catch (Throwable error) {
+                future.completeExceptionally(error);
+            }
+        });
+        return future;
+    }
+
+    /** Replays complete database fallback snapshots before runtime caches are loaded. */
     private void recoverFallbackFiles(Path recoveryDir) {
         try (var files = Files.list(recoveryDir)) {
             List<Path> list = files.filter(f -> f.getFileName().toString().endsWith(".json")).toList();
@@ -209,9 +354,13 @@ public final class BetterVillagersPlugin extends JavaPlugin {
                 String fileName = file.getFileName().toString();
                 try {
                     String uuid = fileName.substring(0, fileName.length() - ".json".length());
+                    UUID.fromString(uuid);
                     String json = Files.readString(file, java.nio.charset.StandardCharsets.UTF_8);
-                    Optional<VillagerData> existing = BV.storage().villagers().find(uuid);
-                    if (existing.isPresent()) {
+                    if (json.stripLeading().startsWith("[")) {
+                        Optional<VillagerData> existing = BV.storage().villagers().find(uuid);
+                        if (existing.isEmpty()) {
+                            throw new IllegalStateException("Legacy recovery has no matching villager row");
+                        }
                         VillagerData data = existing.get();
                         VillagerData updated = new VillagerData(
                                 data.uuid(), data.name(), data.profession(),
@@ -220,9 +369,19 @@ public final class BetterVillagersPlugin extends JavaPlugin {
                                 data.villageId(), data.aiEnabled(), json,
                                 data.createdAt(), System.currentTimeMillis());
                         BV.storage().villagers().upsert(updated);
-                        Files.deleteIfExists(file);
-                        success++;
+                    } else {
+                        VillagerRecoveryRecord record = VillagerRecoveryRecord.fromJson(json);
+                        if (!uuid.equals(record.data().uuid())) {
+                            throw new IllegalStateException("Recovery filename does not match snapshot UUID");
+                        }
+                        if (record.attachToVillage()) {
+                            BV.storage().villagers().insertNewAndAttach(record.data(), record.claimKing());
+                        } else {
+                            BV.storage().villagers().upsert(record.data());
+                        }
                     }
+                    Files.deleteIfExists(file);
+                    success++;
                 } catch (Exception e) {
                     getLogger().warning(BV.messages().raw("log.recovery-fail")
                             .replace("{file}", fileName).replace("{error}", String.valueOf(e.getMessage())));

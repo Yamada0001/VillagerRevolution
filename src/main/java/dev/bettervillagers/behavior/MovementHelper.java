@@ -24,6 +24,7 @@ public final class MovementHelper {
 
     /** 寻路重计算冷却（毫秒）：同一路径至少走 2 秒才允许重新规划。 */
     private static final long REPATH_COOLDOWN_MS = 2000L;
+    private static volatile int maxPathRange = 32;
     /** 每个实体上一次下发寻路的时间戳，用于节流。 */
     private static final Map<String, Long> lastPathTime = new ConcurrentHashMap<>();
     /**
@@ -31,6 +32,10 @@ public final class MovementHelper {
      * <p>仅保存世界名与坐标，避免持有 {@code Location}→{@code World} 强引用阻碍世界卸载（规范 4.x）。
      */
     private static final Map<String, Target> lastPathTarget = new ConcurrentHashMap<>();
+
+    public static void configureMaxRange(int blocks) {
+        maxPathRange = Math.max(4, blocks);
+    }
 
     /** 轻量寻路目标记录（不持有 World 对象）。 */
     private record Target(String worldName, double x, double y, double z) {
@@ -56,31 +61,45 @@ public final class MovementHelper {
             return;
         }
         Location loc = self.getLocation();
+        if (loc.getWorld() == null || target.getWorld() == null
+                || !loc.getWorld().equals(target.getWorld())) {
+            return;
+        }
         double distSq = target.toVector().distanceSquared(loc.toVector());
         if (distSq < 1.0) { // 1 格内视为到达，停止下发
             return;
         }
+        Location pathTarget = limitRange(loc, target, distSq);
         if (self instanceof Mob mob) {
             String key = self.getUniqueId().toString();
             long now = System.currentTimeMillis();
             // 节流：正在寻路时不要打断，除非目标显著变化或冷却已过
-            if (shouldSkipRepath(mob, key, target, now)) {
+            if (shouldSkipRepath(mob, key, pathTarget, now)) {
                 return;
             }
             try {
                 // 原版村民基础速度约 0.5，直接用 speed 作为倍率，不再放大
                 double pfSpeed = Math.clamp(speed, 0.3, 0.6);
-                mob.getPathfinder().moveTo(target, pfSpeed);
+                mob.getPathfinder().moveTo(pathTarget, pfSpeed);
                 lastPathTime.put(key, now);
                 lastPathTarget.put(key, new Target(
-                        target.getWorld() == null ? null : target.getWorld().getName(),
-                        target.getX(), target.getY(), target.getZ()));
+                        pathTarget.getWorld() == null ? null : pathTarget.getWorld().getName(),
+                        pathTarget.getX(), pathTarget.getY(), pathTarget.getZ()));
             } catch (Throwable ignored) {
-                velocityMoveToward(self, target, speed);
+                velocityMoveToward(self, pathTarget, speed);
             }
             return;
         }
-        velocityMoveToward(self, target, speed);
+        velocityMoveToward(self, pathTarget, speed);
+    }
+
+    private static Location limitRange(Location origin, Location target, double distanceSquared) {
+        double maxDistanceSquared = (double) maxPathRange * maxPathRange;
+        if (distanceSquared <= maxDistanceSquared) {
+            return target;
+        }
+        Vector step = target.toVector().subtract(origin.toVector()).normalize().multiply(maxPathRange);
+        return origin.clone().add(step);
     }
 
     /**
@@ -116,6 +135,11 @@ public final class MovementHelper {
         lastPathTarget.remove(uuid);
     }
 
+    public static void clearAll() {
+        lastPathTime.clear();
+        lastPathTarget.clear();
+    }
+
     /**
      * 远离威胁位置逃离。
      */
@@ -124,6 +148,10 @@ public final class MovementHelper {
             return;
         }
         Location loc = self.getLocation();
+        if (loc.getWorld() == null || source.getWorld() == null
+                || !loc.getWorld().equals(source.getWorld())) {
+            return;
+        }
         Vector away = loc.toVector().subtract(source.toVector());
         if (away.lengthSquared() < 0.01) {
             away = new Vector(

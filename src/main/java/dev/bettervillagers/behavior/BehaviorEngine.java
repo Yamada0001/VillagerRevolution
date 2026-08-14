@@ -19,6 +19,7 @@ public final class BehaviorEngine {
 
     private static final double FLEE_CLEAR_RANGE_SQ = 36.0;
     private static final double GUARD_DISPATCH_RANGE_SQ = 2500.0;
+    private static final long TRANSIENT_STATE_TIMEOUT_MS = 30_000L;
 
     private final ThreatDetector threatDetector;
     private final ReflexEngine reflex;
@@ -28,6 +29,7 @@ public final class BehaviorEngine {
     private volatile boolean shutdown;
 
     public BehaviorEngine(int detectionRange, long tacticalIntervalSec, long strategicIntervalSec, long blockCooldownSec) {
+        MovementHelper.configureMaxRange(detectionRange);
         this.threatDetector = new ThreatDetector(detectionRange);
         this.reflex = new ReflexEngine(threatDetector);
         this.tactical = new TacticalAI(threatDetector, tacticalIntervalSec * 1000L);
@@ -36,10 +38,19 @@ public final class BehaviorEngine {
     }
 
     public void tickTactical(BVillager bv) {
-        if (shutdown || bv.state() == VillagerState.SOCIALIZING || bv.state() == VillagerState.TRADING) {
+        if (shutdown) {
             return;
         }
         LivingEntity entity = bv.entity();
+        if (entity != null) {
+            bv.updateLastKnownPosition(entity.getLocation());
+        }
+        bv.recoverActionPoints(System.currentTimeMillis());
+        resetStaleTransientState(bv);
+        if (bv.state() == VillagerState.SOCIALIZING || bv.state() == VillagerState.TRADING
+                || bv.state() == VillagerState.RESTING) {
+            return;
+        }
         if (entity != null && threatDetector.environmentDanger(entity)) {
             reflex.reactToEnvironmentDanger(bv);
             return;
@@ -70,11 +81,13 @@ public final class BehaviorEngine {
         if (self == null || self.isDead()) {
             return;
         }
+        bv.updateLastKnownPosition(self.getLocation());
+        bv.recoverActionPoints(System.currentTimeMillis());
+        resetStaleTransientState(bv);
         if (ReflexEngine.isCombatant(bv.profession()) && bv.professionData() != null) {
             ensureEquipped(self, bv);
         }
-        if (ReflexEngine.isCombatant(bv.profession())
-                && bv.state() == VillagerState.COMBAT
+        if (bv.state() == VillagerState.COMBAT
                 && threatDetector.nearestEnemy(self, bv.villageId()) == null) {
             bv.state(VillagerState.IDLE);
         }
@@ -86,7 +99,7 @@ public final class BehaviorEngine {
         }
         LivingEntity enemy = threatDetector.nearestEnemy(self, bv.villageId());
         if (enemy != null && !enemy.isDead()) {
-            dispatchGuards(self.getLocation(), enemy);
+            dispatchGuards(bv.villageId(), self.getLocation(), enemy.getLocation());
         }
     }
 
@@ -96,7 +109,7 @@ public final class BehaviorEngine {
             if (equipment == null || !equipment.getItemInMainHand().getType().isAir()) {
                 return;
             }
-            EquipmentApplier.apply(self, bv.professionData());
+            dev.bettervillagers.profession.EquipmentDurability.applyCurrent(self, bv.professionData());
         } catch (Throwable t) {
             BV.plugin().getLogger().warning(
                     BV.messages().raw("log.tactical-tick-error")
@@ -105,18 +118,26 @@ public final class BehaviorEngine {
         }
     }
 
-    private void dispatchGuards(Location threatenedLoc, LivingEntity enemy) {
+    private void dispatchGuards(int villageId, Location threatenedLoc, Location enemyLoc) {
         for (BVillager guard : BV.villagers().all()) {
             LivingEntity guardEntity = guard.entity();
-            if (guardEntity == null || guardEntity.isDead() || !ReflexEngine.isCombatant(guard.profession())) {
+            if (guardEntity == null || guard.villageId() != villageId
+                    || !ReflexEngine.isCombatant(guard.profession())) {
                 continue;
             }
-            if (!guardEntity.getWorld().equals(threatenedLoc.getWorld())) {
-                continue;
-            }
-            if (guardEntity.getLocation().distanceSquared(threatenedLoc) < GUARD_DISPATCH_RANGE_SQ) {
-                reflex.defendKing(guard, enemy);
-            }
+            BV.scheduler().runForEntity(guardEntity, () -> {
+                if (guardEntity.isValid() && !guardEntity.isDead()
+                        && guardEntity.getWorld().equals(threatenedLoc.getWorld())
+                        && guardEntity.getLocation().distanceSquared(threatenedLoc) < GUARD_DISPATCH_RANGE_SQ) {
+                    LivingEntity localEnemy = threatDetector.nearestEnemy(guardEntity, villageId);
+                    if (localEnemy != null) {
+                        reflex.defendKing(guard, localEnemy);
+                    } else if (guardEntity.getWorld().equals(enemyLoc.getWorld())) {
+                        guard.state(VillagerState.COMBAT);
+                        MovementHelper.moveToward(guardEntity, enemyLoc, 0.4);
+                    }
+                }
+            }, null);
         }
     }
 
@@ -127,7 +148,7 @@ public final class BehaviorEngine {
     public void onDamaged(BVillager bv, Entity source) {
         reflex.reactToDamage(bv, source);
         if (source instanceof Player player && !isCreativeOrSpectator(player)) {
-            markIllegalPlayer(player);
+            threatDetector.markIllegal(player);
         }
     }
 
@@ -153,16 +174,29 @@ public final class BehaviorEngine {
 
     public void clearVillagerState(String uuid) {
         reflex.clear(uuid);
+        threatDetector.clear(uuid);
         MovementHelper.clear(uuid);
+    }
+
+    public void clearVillageState(int villageId) {
+        strategic.clearVillage(villageId);
     }
 
     public void shutdown() {
         shutdown = true;
         tactical.shutdown();
         strategic.shutdown();
+        threatDetector.clear();
+        MovementHelper.clearAll();
     }
 
-    private static void markIllegalPlayer(Player player) {
-        ThreatDetector.markIllegal(player);
+    private void resetStaleTransientState(BVillager bv) {
+        VillagerState state = bv.state();
+        if ((state == VillagerState.TRADING || state == VillagerState.SOCIALIZING
+                || state == VillagerState.RESTING)
+                && System.currentTimeMillis() - bv.stateSince() >= TRANSIENT_STATE_TIMEOUT_MS) {
+            bv.state(VillagerState.IDLE);
+        }
     }
+
 }

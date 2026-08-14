@@ -3,7 +3,7 @@
 # 对应开发规范第六章 / 各功能模块配置项
 # ver: 配置版本号（勿手动修改，由 Ver.java 控制）
 # ============================================================
-ver: 5
+ver: 6
 plugin:
   language: "zh_CN"
   debug-mode: false
@@ -93,6 +93,11 @@ social:
   chat-cooldown-seconds: 30
   chat-max-length: 32
   trade-chance: 0.35
+  affinity-per-trade: 5
+  breeding-threshold: 80
+  breeding-cooldown-seconds: 1200
+  max-discount-percent: 25
+  affinity-points-per-special-price: 10
   bubble:
     enabled: true
     height: 0.6
@@ -102,11 +107,33 @@ social:
     trade-duration-ticks: 60
     item-spacing: 0.35
 
+# ---------- 村庄外交 ----------
+diplomacy:
+  enabled: true
+  review-interval-seconds: 600  # 同一对村庄至少间隔 10 分钟才重新决策
+  relations: {}                 # 可选初始值，例如 "1-2": ALLY；数据库决策优先
+
+# ---------- 村庄集体活动 ----------
+activities:
+  enabled: true
+  interval-seconds: 1800
+  duration-seconds: 180
+
+# ---------- 玩法平衡 ----------
+gameplay:
+  equipment:
+    repair-per-trade: 10.0
+    blacksmith-repair-per-ingot: 15.0
+  butcher:
+    minimum-adults-per-species: 2
+  container:
+    minimum-occupied-slots: 6
+    max-stacks-per-operation: 2
+
 # ---------- 生电模式（规范 5.x） ----------
 redstone-mode:
   enabled: true
-  default-protected: false
-  protected-regions: []
+  protected-regions: []      # 可选只读预置区域：name/world/x1/y1/z1/x2/y2/z2/owner
 #    - world: "world"
 #      x1: 100
 #      y1: 60
@@ -133,3 +160,6 @@ storage:
 village:
   detection-radius: 64      # 村庄半径覆盖判定
   king-spawn-population: 6  # 触发国王生成的最小人口
+  entry-range-extra: 10
+  entry-title:
+    enabled: true

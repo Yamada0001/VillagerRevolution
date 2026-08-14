@@ -6,12 +6,10 @@ import dev.bettervillagers.villager.BVillager;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
-import org.bukkit.entity.Projectile;
 import org.bukkit.util.Vector;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * 反射层规则引擎（规范 3.1：毫秒级，无 AI，紧急生存反应零延迟）。
@@ -118,7 +116,7 @@ public final class ReflexEngine {
                 MovementHelper.moveToward(self, enemy.getLocation(), COMBAT_SPEED);
             }
             if (distSq <= 400.0 && canShoot(bv.uuid())) {
-                shootArrow(self, enemy);
+                shootArrow(self, enemy, attack);
                 recordShoot(bv.uuid());
             }
             return;
@@ -138,15 +136,16 @@ public final class ReflexEngine {
         }
     }
 
-    private void shootArrow(LivingEntity shooter, LivingEntity target) {
+    private void shootArrow(LivingEntity shooter, LivingEntity target, double attack) {
         Location eye = shooter.getEyeLocation();
         Vector dir = target.getEyeLocation().toVector().subtract(eye.toVector());
         if (dir.lengthSquared() < 0.01) {
             return;
         }
         dir.normalize().multiply(2.5);
-        Projectile arrow = shooter.launchProjectile(org.bukkit.entity.Arrow.class, dir);
+        org.bukkit.entity.Arrow arrow = shooter.launchProjectile(org.bukkit.entity.Arrow.class, dir);
         arrow.setShooter(shooter);
+        arrow.setDamage(Math.max(0.1, attack));
     }
 
     public void reactToDamage(BVillager bv, Entity source) {
@@ -168,11 +167,10 @@ public final class ReflexEngine {
         if (self == null) {
             return;
         }
-        Location away = self.getLocation().add(
-                ThreadLocalRandom.current().nextDouble(-4, 4),
-                0,
-                ThreadLocalRandom.current().nextDouble(-4, 4));
-        MovementHelper.moveToward(self, away, COMBAT_SPEED);
+        Location safe = findSafeAdjacent(self);
+        if (safe != null) {
+            MovementHelper.moveToward(self, safe, COMBAT_SPEED);
+        }
         bv.state(dev.bettervillagers.behavior.VillagerState.FLEEING);
     }
 
@@ -202,9 +200,23 @@ public final class ReflexEngine {
 
     public static boolean isCombatant(Profession prof) {
         return switch (prof) {
-            case KNIGHT, SOLDIER, ARCHER, KING, BUTCHER -> true;
+            case KNIGHT, SOLDIER, ARCHER -> true;
             default -> false;
         };
+    }
+
+    private Location findSafeAdjacent(LivingEntity self) {
+        Location origin = self.getLocation();
+        int[][] offsets = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}};
+        for (int[] offset : offsets) {
+            Location candidate = origin.clone().add(offset[0] * 3, 0, offset[1] * 3);
+            var feet = candidate.getBlock();
+            if (feet.isPassable() && feet.getRelative(org.bukkit.block.BlockFace.UP).isPassable()
+                    && feet.getRelative(org.bukkit.block.BlockFace.DOWN).getType().isSolid()) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     private boolean canAttack(String uuid) {

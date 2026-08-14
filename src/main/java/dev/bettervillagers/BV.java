@@ -33,6 +33,7 @@ public final class BV {
     private static ProfessionManager professions;
     private static VillageManager villages;
     private static dev.bettervillagers.village.DiplomacyManager diplomacy;
+    private static dev.bettervillagers.village.VillageActivityManager activities;
     private static dev.bettervillagers.villager.VillagerManager villagers;
     private static BehaviorEngine behavior;
     private static TradeService trade;
@@ -126,6 +127,14 @@ public final class BV {
         diplomacy = d;
     }
 
+    public static dev.bettervillagers.village.VillageActivityManager activities() {
+        return activities;
+    }
+
+    public static void activities(dev.bettervillagers.village.VillageActivityManager manager) {
+        activities = manager;
+    }
+
     public static dev.bettervillagers.villager.VillagerManager villagers() {
         return villagers;
     }
@@ -209,6 +218,8 @@ public final class BV {
         ai = null;
         professions = null;
         villages = null;
+        diplomacy = null;
+        activities = null;
         villagers = null;
         behavior = null;
         trade = null;

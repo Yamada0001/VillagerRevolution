@@ -28,6 +28,9 @@ public final class VillageEntryListener implements Listener {
     private final Map<UUID, Integer> inside = new ConcurrentHashMap<>();
     /** 节流：每个玩家至少间隔 N tick 才重新计算一次（避免高频移动卡主线程）。 */
     private final Map<UUID, Long> lastCheck = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> checkSequences = new ConcurrentHashMap<>();
+    private final Map<UUID, Position> latestPositions = new ConcurrentHashMap<>();
+    private final java.util.Set<UUID> trailingChecks = ConcurrentHashMap.newKeySet();
     private static final long THROTTLE_TICKS = 10L;
 
     @EventHandler
@@ -38,34 +41,58 @@ public final class VillageEntryListener implements Listener {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
         long now = System.currentTimeMillis();
+        Location to = event.getTo();
+        Position position = new Position(to.getWorld() == null ? null : to.getWorld().getName(),
+                to.getX(), to.getY(), to.getZ());
+        latestPositions.put(uuid, position);
+        long sequence = checkSequences.merge(uuid, 1L, Long::sum);
         Long last = lastCheck.get(uuid);
         if (last != null && now - last < THROTTLE_TICKS * 50L) {
+            scheduleTrailingCheck(player, uuid, THROTTLE_TICKS * 50L - (now - last));
             return;
         }
         lastCheck.put(uuid, now);
+        checkPosition(player, uuid, position, sequence);
+    }
 
-        // 异步做范围/归属/唯一性校验，避免主线程阻塞
-        Location to = event.getTo().clone();
-        // world 名在主线程预先取好，避免异步线程访问游戏 API（规范：异步禁止访问世界）
-        final String worldName = to.getWorld() == null ? null : to.getWorld().getName();
-        int previousId = inside.getOrDefault(uuid, -1);
+    private void scheduleTrailingCheck(Player player, UUID uuid, long remainingMillis) {
+        if (!trailingChecks.add(uuid)) {
+            return;
+        }
+        long delayTicks = Math.max(1L, (long) Math.ceil(remainingMillis / 50.0));
+        BV.scheduler().runAsyncDelayed(() -> {
+            trailingChecks.remove(uuid);
+            Position latest = latestPositions.get(uuid);
+            Long sequence = checkSequences.get(uuid);
+            if (latest == null || sequence == null) {
+                return;
+            }
+            lastCheck.put(uuid, System.currentTimeMillis());
+            checkPosition(player, uuid, latest, sequence);
+        }, delayTicks);
+    }
+
+    private void checkPosition(Player player, UUID uuid, Position position, long sequence) {
         BV.scheduler().runAsync(() -> {
-            Village current = findVillageAsync(to, worldName);
+            Village current = findVillageAsync(position);
+            if (!isCurrent(uuid, sequence)) {
+                return;
+            }
             int currentId = current == null ? -1 : current.id();
+            int previousId = inside.getOrDefault(uuid, -1);
             if (currentId == previousId) {
-                // 同一村庄内：持续刷新底部栏（需回到玩家区域线程）
                 if (current != null) {
-                    refreshActionBar(player, current);
+                    refreshActionBar(player, current, sequence);
                 }
                 return;
             }
             if (current == null) {
                 inside.remove(uuid);
-                clearActionBar(player);
+                clearActionBar(player, sequence);
                 return;
             }
             inside.put(uuid, currentId);
-            showEntry(player, current);
+            showEntry(player, current, sequence);
         });
     }
 
@@ -74,12 +101,16 @@ public final class VillageEntryListener implements Listener {
         UUID uuid = event.getPlayer().getUniqueId();
         inside.remove(uuid);
         lastCheck.remove(uuid);
+        checkSequences.remove(uuid);
+        latestPositions.remove(uuid);
+        trailingChecks.remove(uuid);
     }
 
-    private void showEntry(Player player, Village current) {
+    private void showEntry(Player player, Village current, long sequence) {
         // 标题显示也回到玩家所在区域线程发送（原生 sendTitle 线程要求）
         BV.scheduler().runForEntity(player, () -> {
-            if (!BV.config().villageEntryTitleEnabled()) {
+            if (!isCurrent(player.getUniqueId(), sequence) || !player.isOnline()
+                    || !BV.config().villageEntryTitleEnabled()) {
                 return;
             }
             String unknown = BV.messages().raw("village-entry-unknown");
@@ -87,6 +118,8 @@ public final class VillageEntryListener implements Listener {
             String king = BV.villages().resolveKingName(current.id());
             if (king == null || king.isBlank() || king.equals("-")) {
                 king = unknown;
+            } else {
+                king = MessageService.escapeUntrusted(king);
             }
             String title = BV.messages().raw("village-entry-title").replace("{village}", name);
             String subtitle = BV.messages().raw("village-entry-subtitle")
@@ -101,40 +134,46 @@ public final class VillageEntryListener implements Listener {
         }, null);
     }
 
-    private void refreshActionBar(Player player, Village current) {
+    private void refreshActionBar(Player player, Village current, long sequence) {
         BV.scheduler().runForEntity(player, () -> {
+            if (!isCurrent(player.getUniqueId(), sequence) || !player.isOnline()) {
+                return;
+            }
             String actionBar = BV.messages().raw("village-entry-actionbar")
                     .replace("{village}", villageName(current));
             player.sendActionBar(MessageService.deserialize(actionBar));
         }, null);
     }
 
-    private void clearActionBar(Player player) {
-        BV.scheduler().runForEntity(player, () ->
-                player.sendActionBar(MessageService.deserialize("")), null);
+    private void clearActionBar(Player player, long sequence) {
+        BV.scheduler().runForEntity(player, () -> {
+            if (isCurrent(player.getUniqueId(), sequence) && player.isOnline()) {
+                player.sendActionBar(MessageService.deserialize(""));
+            }
+        }, null);
     }
 
     private String villageName(Village current) {
         return current.name() == null || current.name().isBlank()
                 ? BV.messages().raw("village-id-format").replace("{id}", String.valueOf(current.id()))
-                : current.name();
+                : MessageService.escapeUntrusted(current.name());
     }
 
     /**
      * 异步检测：纯内存遍历村庄列表 + 空间校验，不触碰游戏世界对象（worldName 由调用方在主线程预先取好）。
      */
-    private Village findVillageAsync(Location location, String worldName) {
-        if (BV.villages() == null || worldName == null) {
+    private Village findVillageAsync(Position position) {
+        if (BV.villages() == null || position.worldName() == null) {
             return null;
         }
         int extra = BV.config().villageEntryRangeExtra();
         for (Village village : BV.villages().all()) {
-            if (!village.world().equalsIgnoreCase(worldName)) {
+            if (!village.world().equalsIgnoreCase(position.worldName())) {
                 continue;
             }
-            double dx = location.getX() - village.centerX();
-            double dy = location.getY() - village.centerY();
-            double dz = location.getZ() - village.centerZ();
+            double dx = position.x() - village.centerX();
+            double dy = position.y() - village.centerY();
+            double dz = position.z() - village.centerZ();
             double radius = village.radius() + extra;
             if (dx * dx + dy * dy + dz * dz <= radius * radius) {
                 return village;
@@ -144,9 +183,16 @@ public final class VillageEntryListener implements Listener {
     }
 
     private boolean sameBlock(Location a, Location b) {
-        return a.getBlockX() == b.getBlockX()
+        return a != null && b != null && a.getBlockX() == b.getBlockX()
                 && a.getBlockY() == b.getBlockY()
                 && a.getBlockZ() == b.getBlockZ()
                 && a.getWorld() == b.getWorld();
+    }
+
+    private boolean isCurrent(UUID playerId, long sequence) {
+        return Long.valueOf(sequence).equals(checkSequences.get(playerId));
+    }
+
+    private record Position(String worldName, double x, double y, double z) {
     }
 }

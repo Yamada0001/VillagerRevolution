@@ -2,12 +2,20 @@ package dev.bettervillagers.building;
 
 import dev.bettervillagers.BV;
 import dev.bettervillagers.storage.BuildLayoutRecord;
+import dev.bettervillagers.storage.ConstructionChangeRecord;
+import dev.bettervillagers.scheduler.PlatformDetector;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.World;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Coordinates terrain assessment, blueprint planning, build jobs, and persisted layouts.
@@ -16,26 +24,85 @@ public final class BuildingManager {
 
     private final BuildCache cache = new BuildCache();
     private final List<ConstructionJob> activeJobs = new CopyOnWriteArrayList<>();
-    private final TerrainAnalyzer analyzer = new TerrainAnalyzer();
+    private volatile ExecutorService computeExecutor;
+    private volatile int computeThreads;
+    private final List<ExecutorService> retiredExecutors = new CopyOnWriteArrayList<>();
+    private final TerrainAnalyzer analyzer;
     private final StructureTemplateLibrary templates = new StructureTemplateLibrary();
     private final RoadLayout roads = new RoadLayout();
     private final Map<ConstructionJob, BuildLayoutRecord> plannedLayouts = new ConcurrentHashMap<>();
     private final Map<ConstructionJob, PendingRoad> pendingRoads = new ConcurrentHashMap<>();
+    private final java.util.Set<java.util.concurrent.CompletableFuture<Void>> pendingCommits =
+            ConcurrentHashMap.newKeySet();
 
     public BuildingManager() {
+        this(4);
+    }
+
+    public BuildingManager(int asyncThreads) {
+        this.computeThreads = Math.max(1, asyncThreads);
+        this.computeExecutor = newComputeExecutor(computeThreads);
+        this.analyzer = new TerrainAnalyzer(computeExecutor);
         templates.installDefaults();
+    }
+
+    private static ExecutorService newComputeExecutor(int threads) {
+        return Executors.newFixedThreadPool(threads, runnable -> {
+            Thread thread = new Thread(runnable, "BetterVillagers-BuildCompute");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    public synchronized void reconfigureAsyncThreads(int requestedThreads) {
+        int next = Math.max(1, requestedThreads);
+        if (next == computeThreads) {
+            return;
+        }
+        ExecutorService previous = computeExecutor;
+        computeExecutor = newComputeExecutor(next);
+        computeThreads = next;
+        analyzer.computeExecutor(computeExecutor);
+        previous.shutdown();
+        retiredExecutors.add(previous);
     }
 
     public Location nextRoadSite(int villageId, Location center) {
         return roads.nextSite(villageId, center, cache, templates);
     }
 
-    public void restoreLayouts() {
+    public java.util.concurrent.CompletableFuture<Void> restoreLayouts() {
+        java.util.concurrent.CompletableFuture<Void> future = new java.util.concurrent.CompletableFuture<>();
         BV.scheduler().runAsync(() -> {
-            for (BuildLayoutRecord record : BV.storage().buildLayouts().findAll()) {
-                cache.restore(record);
+            try {
+                for (BuildLayoutRecord record : BV.storage().buildLayouts().findAll()) {
+                    cache.restore(record);
+                }
+                roads.restore(BV.storage().roadPorts().findAll());
+                future.complete(null);
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
             }
-            roads.restore(BV.storage().roadPorts().findAll());
+        });
+        return future.thenCompose(ignored -> recoverInterruptedJobs());
+    }
+
+    private java.util.concurrent.CompletableFuture<Void> recoverInterruptedJobs() {
+        java.util.concurrent.CompletableFuture<List<String>> jobsFuture = new java.util.concurrent.CompletableFuture<>();
+        BV.scheduler().runAsync(() -> {
+            try {
+                jobsFuture.complete(BV.storage().constructionJournals().findPreparedJobs());
+            } catch (Throwable t) {
+                jobsFuture.completeExceptionally(t);
+            }
+        });
+        return jobsFuture.thenCompose(jobIds -> {
+            java.util.concurrent.CompletableFuture<Void> recovery =
+                    java.util.concurrent.CompletableFuture.completedFuture(null);
+            for (String jobId : jobIds) {
+                recovery = recovery.thenCompose(ignored -> rollbackJournal(jobId));
+            }
+            return recovery;
         });
     }
 
@@ -48,12 +115,27 @@ public final class BuildingManager {
         });
     }
 
+    /** Applies the already-persisted village-id migration to runtime building state. */
+    public void mergeVillage(int fromId, int toId) {
+        for (ConstructionJob job : List.copyOf(activeJobs)) {
+            if (job.villageId() == fromId) {
+                job.cancel();
+            }
+        }
+        cache.mergeVillage(fromId, toId);
+        roads.mergeVillage(fromId, toId);
+    }
+
     public BuildCache cache() {
         return cache;
     }
 
+    public int activeJobCount() {
+        return activeJobs.size();
+    }
+
     public void issueTask(String typeName, int villageId, Location center) {
-        if (center == null || center.getWorld() == null) {
+        if (!BV.config().feature("autonomous-building") || center == null || center.getWorld() == null) {
             return;
         }
         BuildType type = BuildType.fromCommand(typeName);
@@ -62,9 +144,9 @@ public final class BuildingManager {
         }
         if (!type.physical()) {
             String displayName = display(type);
-            BV.messages().broadcast("building-started", "structure", displayName);
-            BV.scheduler().runAsyncDelayed(() ->
-                    BV.messages().broadcast("building-completed", "structure", displayName), 100L);
+            BV.scheduler().runGlobal(() -> BV.messages().broadcast("building-started", "structure", displayName));
+            BV.scheduler().runAsyncDelayed(() -> BV.scheduler().runGlobal(() ->
+                    BV.messages().broadcast("building-completed", "structure", displayName)), 100L);
             return;
         }
         if (cache.count(villageId, type) >= type.maxPerVillage()) {
@@ -90,20 +172,29 @@ public final class BuildingManager {
                 : Math.max(initialTemplate.transformedWidth(initialPlacement),
                         initialTemplate.transformedDepth(initialPlacement)) / 2 + 1;
 
-        analyzer.assessAsync(candidate, radius).thenAccept(assessment -> {
+        String worldName = center.getWorld().getName();
+        analyzer.assessAsync(candidate, radius).thenCompose(assessment -> {
             if (assessment == null || !assessment.suitable()) {
                 roads.rollback(villageId, reservation);
                 logUnsuitable(type.name());
-                return;
+                return java.util.concurrent.CompletableFuture.completedFuture(null);
             }
-            consultBuilderAi(type, assessment).thenAccept(approved ->
-                    startApprovedBuild(villageId, candidate, reservation, assessment, type, approved));
+            return consultBuilderAi(type, assessment).thenAccept(approved ->
+                    startApprovedBuild(villageId, worldName, candidate, reservation, assessment, type, approved));
+        }).exceptionally(failure -> {
+            roads.rollback(villageId, reservation);
+            BV.plugin().getLogger().log(java.util.logging.Level.SEVERE,
+                    "Unable to prepare construction task " + type + " for village " + villageId, failure);
+            return null;
         });
     }
 
-    private void startApprovedBuild(int villageId, Location candidate, RoadLayout.Reservation reservation,
+    private void startApprovedBuild(int villageId, String worldName, Location candidate,
+                                    RoadLayout.Reservation reservation,
                                     SiteAssessment assessment, BuildType requested, BuildType approved) {
-        if (approved == null || approved == BuildType.DESTROY && requested != BuildType.DESTROY) {
+        if (!BV.config().feature("autonomous-building") || BV.villages().get(villageId).isEmpty()
+                || candidate.getWorld() == null || !candidate.getWorld().getName().equals(worldName)
+                || approved == null || approved == BuildType.DESTROY && requested != BuildType.DESTROY) {
             roads.rollback(villageId, reservation);
             return;
         }
@@ -145,23 +236,28 @@ public final class BuildingManager {
             }
         }
 
-        if (!cache.tryOccupy(villageId, approved, candidate.getWorld().getName(),
+        if (touchesProtectedRegion(worldName, steps)) {
+            roads.rollback(villageId, reservation);
+            return;
+        }
+
+        if (!cache.tryOccupy(villageId, approved, worldName,
                 assessment.centerX(), assessment.centerZ(), minX, maxX, minZ, maxZ)) {
             roads.rollback(villageId, reservation);
             return;
         }
         if (steps.isEmpty()) {
-            cache.releaseOnCancel(villageId, approved, candidate.getWorld().getName(),
+            cache.releaseOnCancel(villageId, approved, worldName,
                     assessment.centerX(), assessment.centerZ());
             roads.rollback(villageId, reservation);
             return;
         }
 
-        ConstructionJob job = new ConstructionJob(villageId, approved.name(), candidate.getWorld().getName(),
+        ConstructionJob job = new ConstructionJob(villageId, approved.name(), worldName, candidate,
                 assessment.centerX(), assessment.targetLevelY(), assessment.centerZ(), steps, display(approved));
         job.bindCache(cache, approved);
         activeJobs.add(job);
-        plannedLayouts.put(job, new BuildLayoutRecord(villageId, candidate.getWorld().getName(), approved.name(),
+        plannedLayouts.put(job, new BuildLayoutRecord(villageId, worldName, approved.name(),
                 templateId, assessment.centerX(), assessment.targetLevelY(), assessment.centerZ(),
                 minX, maxX, minZ, maxZ,
                 placement == null ? StructureTemplate.Rotation.NONE.name() : placement.rotation().name(),
@@ -175,6 +271,18 @@ public final class BuildingManager {
 
     private static int defaultHalfSize(BuildType type) {
         return Math.max(3, type.minSpacing() / 2 + 2);
+    }
+
+    private boolean touchesProtectedRegion(String worldName, List<ConstructionStep> steps) {
+        if (BV.regions() == null || worldName == null || steps == null || steps.isEmpty()) {
+            return false;
+        }
+        for (ConstructionStep step : steps) {
+            if (BV.regions().isProtected(worldName, step.x(), step.y(), step.z())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void logUnsuitable(String type) {
@@ -223,16 +331,49 @@ public final class BuildingManager {
     }
 
     void onJobCompleted(ConstructionJob job) {
-        activeJobs.remove(job);
-        PendingRoad pendingRoad = pendingRoads.remove(job);
+        PendingRoad pendingRoad = pendingRoads.get(job);
         if (pendingRoad != null) {
             roads.commit(job.villageId(), pendingRoad.site(), pendingRoad.reservation());
         }
-        BuildLayoutRecord record = plannedLayouts.remove(job);
+        BuildLayoutRecord record = plannedLayouts.get(job);
         if (record != null) {
             cache.rememberCompleted(record);
-            persistVillage(record.villageId());
         }
+        List<BuildLayoutRecord> layouts = cache.exportVillage(job.villageId());
+        List<dev.bettervillagers.storage.RoadPortRecord> ports = roads.exportVillage(job.villageId());
+        java.util.concurrent.CompletableFuture<Void> commit = new java.util.concurrent.CompletableFuture<>();
+        pendingCommits.add(commit);
+        BV.scheduler().runAsync(() -> {
+            try {
+                BV.storage().constructionJournals().completeWithLayout(
+                        job.jobId(), job.villageId(), layouts, ports);
+                commit.complete(null);
+            } catch (Throwable t) {
+                commit.completeExceptionally(t);
+            }
+        });
+        commit.whenComplete((ignored, failure) -> {
+            pendingCommits.remove(commit);
+            if (failure == null) {
+                activeJobs.remove(job);
+                pendingRoads.remove(job);
+                plannedLayouts.remove(job);
+                BV.scheduler().runGlobal(job::commitCompleted);
+                return;
+            }
+            if (record != null) {
+                cache.forgetCompleted(record);
+            }
+            if (pendingRoad != null) {
+                roads.rollbackCommitted(job.villageId(), pendingRoad.site(), pendingRoad.reservation());
+            }
+            pendingRoads.remove(job);
+            plannedLayouts.remove(job);
+            job.prepareRollbackAfterCommitFailure();
+            BV.plugin().getLogger().log(java.util.logging.Level.SEVERE,
+                    "Construction commit failed; rolling back job " + job.jobId(), failure);
+            rollbackJob(job);
+        });
     }
 
     void onJobCancelled(ConstructionJob job) {
@@ -242,6 +383,100 @@ public final class BuildingManager {
             roads.rollback(job.villageId(), pendingRoad.reservation());
         }
         plannedLayouts.remove(job);
+    }
+
+    void rollbackJob(ConstructionJob job) {
+        rollbackJournal(job.jobId()).whenComplete((ignored, failure) -> {
+            if (failure != null) {
+                BV.plugin().getLogger().log(java.util.logging.Level.SEVERE,
+                        "Construction rollback remains pending for job " + job.jobId(), failure);
+                job.rollbackFailed(failure);
+                return;
+            }
+            BV.scheduler().runGlobal(job::rollbackCompleted);
+        });
+    }
+
+    private java.util.concurrent.CompletableFuture<Void> rollbackJournal(String jobId) {
+        java.util.concurrent.CompletableFuture<List<ConstructionChangeRecord>> load =
+                new java.util.concurrent.CompletableFuture<>();
+        BV.scheduler().runAsync(() -> {
+            try {
+                load.complete(BV.storage().constructionJournals().findChanges(jobId));
+            } catch (Throwable t) {
+                load.completeExceptionally(t);
+            }
+        });
+        return load.thenCompose(this::restoreChanges)
+                .thenCompose(ignored -> {
+                    java.util.concurrent.CompletableFuture<Void> cleaned =
+                            new java.util.concurrent.CompletableFuture<>();
+                    BV.scheduler().runAsync(() -> {
+                        try {
+                            BV.storage().constructionJournals().rolledBack(jobId);
+                            cleaned.complete(null);
+                        } catch (Throwable t) {
+                            cleaned.completeExceptionally(t);
+                        }
+                    });
+                    return cleaned;
+                });
+    }
+
+    private java.util.concurrent.CompletableFuture<Void> restoreChanges(
+            List<ConstructionChangeRecord> changes) {
+        if (changes.isEmpty()) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+        // The first snapshot for a coordinate is its pre-job value. Restoring just that
+        // snapshot avoids ordering races when a blueprint touched the same block twice.
+        Map<BlockKey, ConstructionChangeRecord> originals = new LinkedHashMap<>();
+        for (ConstructionChangeRecord change : changes) {
+            originals.putIfAbsent(new BlockKey(
+                    change.world(), change.x(), change.y(), change.z()), change);
+        }
+        java.util.concurrent.CompletableFuture<Void> restored = new java.util.concurrent.CompletableFuture<>();
+        BV.scheduler().runGlobal(() -> {
+            try {
+                List<java.util.concurrent.CompletableFuture<Void>> blockFutures =
+                        new java.util.ArrayList<>(originals.size());
+                for (ConstructionChangeRecord change : originals.values()) {
+                    World world = Bukkit.getWorld(change.world());
+                    if (world == null) {
+                        throw new IllegalStateException("World unavailable during construction rollback: "
+                                + change.world());
+                    }
+                    Location location = new Location(world, change.x(), change.y(), change.z());
+                    java.util.concurrent.CompletableFuture<Void> blockFuture =
+                            new java.util.concurrent.CompletableFuture<>();
+                    blockFutures.add(blockFuture);
+                    BV.scheduler().runAtRegion(location, () -> {
+                        try {
+                            if (!world.isChunkLoaded(change.x() >> 4, change.z() >> 4)) {
+                                world.getChunkAt(change.x() >> 4, change.z() >> 4);
+                            }
+                            location.getBlock().setBlockData(
+                                    Bukkit.createBlockData(change.oldBlockData()), false);
+                            blockFuture.complete(null);
+                        } catch (Throwable t) {
+                            blockFuture.completeExceptionally(t);
+                        }
+                    });
+                }
+                java.util.concurrent.CompletableFuture.allOf(
+                        blockFutures.toArray(java.util.concurrent.CompletableFuture[]::new))
+                        .whenComplete((ignored, failure) -> {
+                            if (failure == null) {
+                                restored.complete(null);
+                            } else {
+                                restored.completeExceptionally(failure);
+                            }
+                        });
+            } catch (Throwable t) {
+                restored.completeExceptionally(t);
+            }
+        });
+        return restored;
     }
 
     private void persistVillage(int villageId) {
@@ -254,13 +489,64 @@ public final class BuildingManager {
     }
 
     public void shutdown() {
-        for (ConstructionJob job : activeJobs) {
+        List<ConstructionJob> jobs = List.copyOf(activeJobs);
+        for (ConstructionJob job : jobs) {
             try {
                 job.cancel();
             } catch (Throwable ignored) {
             }
         }
+        if (!PlatformDetector.isFolia() && Bukkit.isPrimaryThread()) {
+            for (ConstructionJob job : jobs) {
+                try {
+                    if (job.rollbackRequested()) {
+                        job.restoreOnPaperShutdown();
+                    }
+                } catch (Throwable failure) {
+                    BV.plugin().getLogger().log(java.util.logging.Level.SEVERE,
+                            "Immediate Paper construction rollback failed for " + job.jobId(), failure);
+                }
+            }
+        } else if (PlatformDetector.isFolia()) {
+            try {
+                java.util.concurrent.CompletableFuture.allOf(jobs.stream()
+                                .filter(ConstructionJob::rollbackRequested)
+                                .map(ConstructionJob::cancellationFuture)
+                                .toArray(java.util.concurrent.CompletableFuture[]::new))
+                        .get(15L, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // Startup recovery will replay any journal whose region task did not finish in time.
+            }
+        }
         activeJobs.clear();
+        try {
+            java.util.concurrent.CompletableFuture.allOf(
+                    pendingCommits.toArray(java.util.concurrent.CompletableFuture[]::new))
+                    .get(10L, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            // A PREPARED journal is intentionally retained for next-start rollback.
+        }
+        List<ExecutorService> executors = new java.util.ArrayList<>(retiredExecutors);
+        executors.add(computeExecutor);
+        executors.forEach(ExecutorService::shutdown);
+        try {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10L);
+            for (ExecutorService executor : executors) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0L || !executor.awaitTermination(remaining, TimeUnit.NANOSECONDS)) {
+                    executor.shutdownNow();
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            executors.forEach(ExecutorService::shutdownNow);
+        }
+    }
+
+    public void cancelAll() {
+        for (ConstructionJob job : List.copyOf(activeJobs)) {
+            job.cancel();
+        }
     }
 
     public boolean isVillageBuilding(int villageId) {
@@ -332,5 +618,8 @@ public final class BuildingManager {
     }
 
     private record PendingRoad(Location site, RoadLayout.Reservation reservation) {
+    }
+
+    private record BlockKey(String world, int x, int y, int z) {
     }
 }

@@ -21,14 +21,17 @@ public final class BVillager {
     public static final int OP_BREAK = 0, OP_PLACE = 1, OP_INTERACT = 2;
 
     private final String uuid;
+    private final long createdAt;
     // 多线程读写：异步 AI 回调/合并线程写入，主/区域线程读取，须 volatile 保证可见性
     private volatile String name;
     private volatile Profession profession;
     private volatile ProfessionData professionData;
     private volatile int villageId;
     private volatile boolean aiEnabled;
+    private volatile boolean protectedRegionSuspended;
     private volatile boolean professionLocked;   // 管理员指派锁定
     private volatile VillagerState state = VillagerState.IDLE;
+    private volatile long stateSince = System.currentTimeMillis();
     private volatile long lastTactical = 0L;
     private volatile long lastStrategic = 0L;
     private final WeakReference<Villager> entityRef;
@@ -37,6 +40,7 @@ public final class BVillager {
 
     // 规范 3.2：方块操作行动点数与四类独立冷却
     private volatile double actionPoints = 100.0;
+    private long lastActionPointRecovery = System.currentTimeMillis();
     // 四类操作独立冷却时间戳（AtomicLong 保证跨线程读写的可见性与原子性）
     private final AtomicLong[] lastBlockOp = {
             new AtomicLong(), new AtomicLong(), new AtomicLong()
@@ -53,19 +57,29 @@ public final class BVillager {
     private volatile long lastWorkTask = 0L;
     // 规范 3.3：上次参与跨职业社交的时间戳（攀谈冷却，贴合原版村民社交间隔）
     private volatile long lastSocialTime = 0L;
+    private volatile PositionSnapshot lastKnownPosition;
+    private volatile double lastKnownHealth;
 
     public BVillager(VillagerData data, Villager entity, Profession profession, ProfessionData pd) {
         this.uuid = data.uuid();
+        this.createdAt = data.createdAt() > 0 ? data.createdAt() : System.currentTimeMillis();
         this.name = data.name();
         this.profession = profession;
         this.professionData = pd;
         this.villageId = data.villageId();
         this.aiEnabled = data.aiEnabled();
         this.entityRef = new WeakReference<>(entity);
+        this.lastKnownPosition = new PositionSnapshot(data.locationWorld(), data.locationX(),
+                data.locationY(), data.locationZ());
+        this.lastKnownHealth = data.health();
     }
 
     public String uuid() {
         return uuid;
+    }
+
+    public long createdAt() {
+        return createdAt;
     }
 
     public String name() {
@@ -99,11 +113,24 @@ public final class BVillager {
     }
 
     public boolean aiEnabled() {
-        return aiEnabled;
+        return aiEnabled && !protectedRegionSuspended;
     }
 
     public void aiEnabled(boolean enabled) {
         this.aiEnabled = enabled;
+    }
+
+    /** The configured switch persisted for this villager, excluding temporary region suspension. */
+    public boolean configuredAiEnabled() {
+        return aiEnabled;
+    }
+
+    public void protectedRegionSuspended(boolean suspended) {
+        this.protectedRegionSuspended = suspended;
+    }
+
+    public boolean protectedRegionSuspended() {
+        return protectedRegionSuspended;
     }
 
     public boolean professionLocked() {
@@ -115,7 +142,14 @@ public final class BVillager {
     }
 
     public void state(VillagerState state) {
-        this.state = state;
+        if (state != null && this.state != state) {
+            this.state = state;
+            this.stateSince = System.currentTimeMillis();
+        }
+    }
+
+    public long stateSince() {
+        return stateSince;
     }
 
     public long lastTactical() {
@@ -141,6 +175,7 @@ public final class BVillager {
 
     /** 消耗行动点数，不足返回 false（synchronized 保证 check-then-act 原子性）。 */
     public synchronized boolean failedToConsumeActionPoints(double cost) {
+        recoverActionPoints(System.currentTimeMillis());
         if (actionPoints < cost) {
             return true;
         }
@@ -148,7 +183,25 @@ public final class BVillager {
         return false;
     }
 
-    /** 回复行动点数（上限 100）。 */
+    /** Returns a reservation when an operation was validated but made no change. */
+    public synchronized void refundActionPoints(double amount) {
+        actionPoints = Math.min(100.0, actionPoints + Math.max(0.0, amount));
+    }
+
+    /** 按每秒 1 点恢复行动点数（上限 100）。 */
+    public synchronized void recoverActionPoints(long now) {
+        if (now <= lastActionPointRecovery) {
+            return;
+        }
+        actionPoints = Math.min(100.0, actionPoints + (now - lastActionPointRecovery) / 1000.0);
+        lastActionPointRecovery = now;
+    }
+
+    public synchronized double actionPoints() {
+        recoverActionPoints(System.currentTimeMillis());
+        return actionPoints;
+    }
+
     public long lastBlockOp(int opKind) {
         return lastBlockOp[opKind].get();
     }
@@ -224,22 +277,51 @@ public final class BVillager {
         this.lastSocialTime = t;
     }
 
+    /** 在实体所属区域线程调用，供异步存档和聚合查询读取。 */
+    public void updateLastKnownPosition(org.bukkit.Location location) {
+        if (location == null || location.getWorld() == null) {
+            return;
+        }
+        lastKnownPosition = new PositionSnapshot(location.getWorld().getName(), location.getX(),
+                location.getY(), location.getZ());
+    }
+
+    public PositionSnapshot lastKnownPosition() {
+        return lastKnownPosition;
+    }
+
+    /** Captures entity facts while already running on the entity-owned thread. */
+    public void updateEntitySnapshot(org.bukkit.entity.LivingEntity entity) {
+        if (entity == null) {
+            return;
+        }
+        updateLastKnownPosition(entity.getLocation());
+        lastKnownHealth = entity.getHealth();
+    }
+
+    public double lastKnownHealth() {
+        return lastKnownHealth;
+    }
+
     /** 转为持久化数据（位置/记忆由管理器在保存时刷新）。 */
-    public VillagerData toData(String aiMemoryJson, long createdAt) {
-        Villager v = entity();
+    public VillagerData toData(String aiMemoryJson) {
         long now = System.currentTimeMillis();
         Defense defense = professionData != null ? professionData.stats().defense() : Defense.LOW;
+        PositionSnapshot position = lastKnownPosition;
         return new VillagerData(
                 uuid, name, profession.id(),
                 professionData != null ? professionData.stats().health() : 40,
                 professionData != null ? professionData.stats().attack() : 5,
                 defense.name(),
-                v != null ? v.getWorld().getName() : "world",
-                v != null ? v.getLocation().getX() : 0,
-                v != null ? v.getLocation().getY() : 0,
-                v != null ? v.getLocation().getZ() : 0,
-                villageId, aiEnabled, aiMemoryJson,
-                createdAt > 0 ? createdAt : now, now
+                position != null ? position.world() : "world",
+                position != null ? position.x() : 0,
+                position != null ? position.y() : 0,
+                position != null ? position.z() : 0,
+                villageId, configuredAiEnabled(), aiMemoryJson,
+                createdAt, now
         );
+    }
+
+    public record PositionSnapshot(String world, double x, double y, double z) {
     }
 }

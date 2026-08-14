@@ -16,6 +16,10 @@ public final class StorageService {
     private final RegionRepository regions;
     private final BuildLayoutRepository buildLayouts;
     private final RoadPortRepository roadPorts;
+    private final ConstructionJournalRepository constructionJournals;
+    private final TradeJournalRepository tradeJournals;
+    private final RelationRepository relations;
+    private final VillageDiplomacyRepository diplomacy;
 
     public StorageService(Plugin plugin, ConfigurationSection storageCfg) {
         boolean mysql = "mysql".equalsIgnoreCase(storageCfg.getString("type", "sqlite"));
@@ -26,6 +30,10 @@ public final class StorageService {
         this.regions = new RegionRepository(dataSource);
         this.buildLayouts = new BuildLayoutRepository(dataSource);
         this.roadPorts = new RoadPortRepository(dataSource);
+        this.constructionJournals = new ConstructionJournalRepository(dataSource);
+        this.tradeJournals = new TradeJournalRepository(dataSource);
+        this.relations = new RelationRepository(dataSource, mysql);
+        this.diplomacy = new VillageDiplomacyRepository(dataSource);
     }
 
     public VillagerRepository villagers() {
@@ -43,6 +51,14 @@ public final class StorageService {
     public BuildLayoutRepository buildLayouts() { return buildLayouts; }
 
     public RoadPortRepository roadPorts() { return roadPorts; }
+
+    public ConstructionJournalRepository constructionJournals() { return constructionJournals; }
+
+    public TradeJournalRepository tradeJournals() { return tradeJournals; }
+
+    public RelationRepository relations() { return relations; }
+
+    public VillageDiplomacyRepository diplomacy() { return diplomacy; }
 
     public void close() {
         dataSource.close();

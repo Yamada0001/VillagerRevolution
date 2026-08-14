@@ -13,7 +13,7 @@ import org.bukkit.Location;
 import org.bukkit.entity.LivingEntity;
 
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.Locale;
 
 /**
  * 战术层 AI（规范 3.1：秒级，周期性调用大模型处理中频决策）。
@@ -126,7 +126,8 @@ public final class TacticalAI {
 
     private boolean isRunning() {
         return !shutdown && BV.plugin() != null && BV.plugin().isEnabled()
-                && BV.scheduler() != null && BV.messages() != null;
+                && BV.scheduler() != null && BV.messages() != null
+                && BV.config().feature("ai-behavior");
     }
 
     public void shutdown() {
@@ -134,10 +135,11 @@ public final class TacticalAI {
     }
 
     private String parseAction(String text) {
-        String upper = text.toUpperCase();
-        for (String a : ACTIONS) {
-            if (upper.contains(a)) {
-                return a;
+        String upper = text == null ? "" : text.strip().toUpperCase(Locale.ROOT);
+        String first = upper.split("[^A-Z]+", 2)[0];
+        for (String action : ACTIONS) {
+            if (action.equals(first)) {
+                return action;
             }
         }
         return "WORK";
@@ -153,6 +155,10 @@ public final class TacticalAI {
         }
         switch (action) {
             case "ATTACK" -> {
+                if (!dev.bettervillagers.behavior.reflex.ReflexEngine.isCombatant(bv.profession())) {
+                    fleeFromNearestThreat(bv, self);
+                    return;
+                }
                 // 修复问题5：战术层仅设置战斗状态并接近敌人，不直接造成伤害。
                 // 实际攻击伤害由反射层 combatTick（每0.5s，1s冷却）负责，确保一下一下攻击。
                 bv.state(VillagerState.COMBAT);
@@ -164,13 +170,7 @@ public final class TacticalAI {
                     }
                 }
             }
-            case "FLEE" -> {
-                bv.state(VillagerState.FLEEING);
-                Location retreat = self.getLocation().add(
-                        ThreadLocalRandom.current().nextDouble(-8, 8), 0,
-                        ThreadLocalRandom.current().nextDouble(-8, 8));
-                dev.bettervillagers.behavior.MovementHelper.flee(self, retreat, TACTICAL_SPEED);
-            }
+            case "FLEE" -> fleeFromNearestThreat(bv, self);
             case "PATROL", "WORK" -> {
                 // 修复绕圈：使用固定巡逻锚点（BVillager.patrolAnchor），不再相对当前位置漂移。
                 bv.state(VillagerState.WORKING);
@@ -180,7 +180,18 @@ public final class TacticalAI {
                 }
             }
             case "REST" -> bv.state(VillagerState.RESTING);
-            case "TRADE" -> bv.state(VillagerState.TRADING);
+            // 交易只能由 SocialEngine 创建会话；战术层不直接制造无主 TRADING 状态。
+            case "TRADE" -> bv.state(VillagerState.IDLE);
         }
+    }
+
+    private void fleeFromNearestThreat(BVillager bv, LivingEntity self) {
+        LivingEntity enemy = threatDetector.nearestEnemy(self, bv.villageId());
+        if (enemy == null || enemy.getWorld() != self.getWorld()) {
+            bv.state(VillagerState.IDLE);
+            return;
+        }
+        bv.state(VillagerState.FLEEING);
+        dev.bettervillagers.behavior.MovementHelper.flee(self, enemy.getLocation(), TACTICAL_SPEED);
     }
 }

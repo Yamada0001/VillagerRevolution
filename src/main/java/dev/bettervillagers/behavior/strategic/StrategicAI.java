@@ -31,14 +31,14 @@ public final class StrategicAI {
     private static final long NIGHT_END_TICKS = 23000L;
     /** 夜间跳过战略决策的概率（原硬编码 0.7）。 */
     private static final double NIGHT_SKIP_PROBABILITY = 0.7;
-    private static final Set<Integer> planningVillages = ConcurrentHashMap.newKeySet();
-    private static final Map<Integer, Long> lastCommandTime = new ConcurrentHashMap<>();
+    private final Set<Integer> planningVillages = ConcurrentHashMap.newKeySet();
+    private final Map<Integer, Long> lastCommandTime = new ConcurrentHashMap<>();
     private volatile boolean shutdown;
 
     /**
      * 清理指定村庄的战略相关缓存（村庄合并/删除时调用，规范 4.x：避免静态 Map 残留 stale 条目）。
      */
-    public static void clearVillage(int villageId) {
+    public void clearVillage(int villageId) {
         planningVillages.remove(villageId);
         lastCommandTime.remove(villageId);
     }
@@ -55,6 +55,20 @@ public final class StrategicAI {
         if (now - king.lastStrategic() < intervalMillis) {
             return;
         }
+        king.lastStrategic(now);
+        Village village = BV.villages().get(king.villageId()).orElse(null);
+        if (village == null || king.entity() == null) {
+            return;
+        }
+        if (BV.diplomacy() != null) {
+            BV.diplomacy().review(king, village);
+        }
+        if (BV.activities() != null) {
+            BV.activities().tick(village);
+        }
+        if (!BV.config().feature("autonomous-building")) {
+            return;
+        }
         Long lastCmd = lastCommandTime.get(king.villageId());
         if (lastCmd != null && now - lastCmd < COMMAND_COOLDOWN_MS) {
             return;
@@ -66,14 +80,10 @@ public final class StrategicAI {
             long worldTime = king.entity().getWorld().getTime();
             if (worldTime >= NIGHT_START_TICKS && worldTime <= NIGHT_END_TICKS
                     && Math.random() < NIGHT_SKIP_PROBABILITY) {
-                king.lastStrategic(now);
                 return;
             }
         }
-        king.lastStrategic(now);
-
-        Village village = BV.villages().get(king.villageId()).orElse(null);
-        if (village == null || king.entity() == null || BV.building() == null) {
+        if (BV.building() == null) {
             return;
         }
         int pop = BV.villages().countVillagersInVillage(village.id());
@@ -139,10 +149,12 @@ public final class StrategicAI {
 
     private void applyPlan(BVillager king, Village village, AIResult result,
                            BuildType recommended, BuildType.DevPhase phase) {
+        if (!isRunning()) {
+            planningVillages.remove(village.id());
+            return;
+        }
+        boolean dispatched = false;
         try {
-            if (!isRunning()) {
-                return;
-            }
             BuildType type = recommended;
             boolean isDegraded = result == null || !result.isUsable();
             if (!isDegraded) {
@@ -161,24 +173,37 @@ public final class StrategicAI {
                 return;
             }
 
-            lastCommandTime.put(village.id(), System.currentTimeMillis());
-            org.bukkit.Location center = pickSite(village, type);
-            if (center == null || center.getWorld() == null) {
-                return;
-            }
-
             final BuildType finalType = type;
-            final org.bukkit.Location buildCenter = center;
-            // 异步下发：阶段内可并行多个 issueTask
-            BV.scheduler().runAsync(() -> BV.building().issueTask(
-                    finalType.name(), village.id(), buildCenter));
             String displayName = BV.messages().raw("structure." + finalType.structureKey());
             if (displayName.startsWith("structure.")) {
                 displayName = finalType.name();
             }
             final String notificationName = displayName;
-            // 通知涉及玩家 API，applyPlan 运行在 AI 回调线程，须切回全局/主线程执行
-            BV.scheduler().runGlobal(() -> notifyVillagePlayers(village, king.name(), notificationName));
+            BV.scheduler().runGlobal(() -> dispatchPlan(king, village, finalType, notificationName));
+            dispatched = true;
+        } finally {
+            if (!dispatched) {
+                planningVillages.remove(village.id());
+            }
+        }
+    }
+
+    private void dispatchPlan(BVillager king, Village village, BuildType type, String notificationName) {
+        try {
+            if (!isRunning() || !BV.config().feature("autonomous-building")) {
+                return;
+            }
+            org.bukkit.Location center = pickSite(village, type);
+            if (center == null || center.getWorld() == null) {
+                return;
+            }
+            lastCommandTime.put(village.id(), System.currentTimeMillis());
+            BV.scheduler().runAtRegion(center, () -> {
+                int surfaceY = center.getWorld().getHighestBlockYAt(center.getBlockX(), center.getBlockZ()) + 1;
+                center.setY(surfaceY);
+                BV.building().issueTask(type.name(), village.id(), center);
+            });
+            notifyVillagePlayers(village, king.name(), notificationName);
         } finally {
             planningVillages.remove(village.id());
         }
@@ -187,6 +212,7 @@ public final class StrategicAI {
     public void shutdown() {
         shutdown = true;
         planningVillages.clear();
+        lastCommandTime.clear();
     }
 
     private boolean isRunning() {
@@ -199,24 +225,21 @@ public final class StrategicAI {
         double radius = village.radius() + extra;
         double radiusSq = radius * radius;
         String message = BV.messages().raw("village-entry-command")
-                .replace("{king}", kingName).replace("{command}", command);
-        org.bukkit.World world = org.bukkit.Bukkit.getWorld(village.world());
-        if (world == null) {
-            return;
-        }
-        org.bukkit.Bukkit.getOnlinePlayers().forEach(player -> {
-            if (!player.getWorld().equals(world)) {
-                return;
-            }
-            // 仅读取玩家坐标做距离判定（运行于全局/主线程，安全）
-            org.bukkit.Location pl = player.getLocation();
-            double dx = pl.getX() - village.centerX();
-            double dy = pl.getY() - village.centerY();
-            double dz = pl.getZ() - village.centerZ();
-            if (dx * dx + dy * dy + dz * dz <= radiusSq) {
-                player.sendMessage(dev.bettervillagers.i18n.MessageService.deserialize(message));
-            }
-        });
+                .replace("{king}", dev.bettervillagers.i18n.MessageService.escapeUntrusted(kingName))
+                .replace("{command}", command);
+        org.bukkit.Bukkit.getOnlinePlayers().forEach(player ->
+            BV.scheduler().runForEntity(player, () -> {
+                if (!player.getWorld().getName().equals(village.world())) {
+                    return;
+                }
+                org.bukkit.Location pl = player.getLocation();
+                double dx = pl.getX() - village.centerX();
+                double dy = pl.getY() - village.centerY();
+                double dz = pl.getZ() - village.centerZ();
+                if (dx * dx + dy * dy + dz * dz <= radiusSq) {
+                    player.sendMessage(dev.bettervillagers.i18n.MessageService.deserialize(message));
+                }
+            }, null));
     }
 
     /**

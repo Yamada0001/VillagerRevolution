@@ -14,11 +14,16 @@ import java.util.List;
  */
 public final class AIMemory {
 
-    private final int maxHistory;
+    private volatile int maxHistory;
     private final List<AIRequest.Message> messages = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public AIMemory(int maxHistory) {
         this.maxHistory = maxHistory;
+    }
+
+    public void reconfigure(int newMaxHistory) {
+        maxHistory = Math.max(1, newMaxHistory);
+        prune(maxHistory);
     }
 
     /** 追加一轮对话（用户问 + 助手答）。 */

@@ -14,6 +14,8 @@ import java.util.List;
 public final class RegionVisualizer {
 
     private static final int PARTICLE_STEP = 3;
+    private static final int MAX_PARTICLES = 2040;
+    private static final int MAX_STEPS_PER_EDGE = MAX_PARTICLES / 12 - 1;
     private static final long PREVIEW_PERIOD_TICKS = 20L;
 
     public void showBoundary(Player player, ProtectedRegion region) {
@@ -38,7 +40,7 @@ public final class RegionVisualizer {
     }
 
     private List<Point> boundaryPoints(Bounds bounds) {
-        List<Point> points = new ArrayList<>();
+        List<Point> points = new ArrayList<>(MAX_PARTICLES);
         if (!bounds.complete()) {
             points.add(new Point(bounds.minX(), bounds.minY(), bounds.minZ()));
             return points;
@@ -64,7 +66,7 @@ public final class RegionVisualizer {
 
     private void addLine(List<Point> points, int x1, int y1, int z1, int x2, int y2, int z2) {
         int distance = Math.max(Math.abs(x2 - x1), Math.max(Math.abs(y2 - y1), Math.abs(z2 - z1)));
-        int steps = Math.max(1, distance / PARTICLE_STEP);
+        int steps = lineSteps(distance);
         for (int index = 0; index <= steps; index++) {
             double ratio = (double) index / steps;
             points.add(new Point(
@@ -72,6 +74,10 @@ public final class RegionVisualizer {
                     (int) Math.round(y1 + (y2 - y1) * ratio),
                     (int) Math.round(z1 + (z2 - z1) * ratio)));
         }
+    }
+
+    static int lineSteps(int distance) {
+        return Math.clamp(distance / PARTICLE_STEP, 1, MAX_STEPS_PER_EDGE);
     }
 
     private void sendParticles(Player player, World world, List<Point> points) {

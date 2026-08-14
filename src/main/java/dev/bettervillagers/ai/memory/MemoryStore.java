@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class MemoryStore {
 
-    private final int maxHistory;
+    private volatile int maxHistory;
     private final ConcurrentHashMap<String, AIMemory> store = new ConcurrentHashMap<>();
 
     public MemoryStore(int maxHistory) {
@@ -34,6 +34,11 @@ public final class MemoryStore {
     public String export(String uuid) {
         AIMemory m = store.get(uuid);
         return m == null ? "[]" : m.toJson();
+    }
+
+    public void reconfigure(int newMaxHistory) {
+        maxHistory = Math.max(1, newMaxHistory);
+        store.values().forEach(memory -> memory.reconfigure(maxHistory));
     }
 
 }

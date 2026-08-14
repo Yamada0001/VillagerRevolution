@@ -5,18 +5,21 @@ import dev.bettervillagers.command.PlayerSelection;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Villager;
+import org.bukkit.entity.Animals;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityBreedEvent;
 import org.bukkit.event.player.PlayerFishEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerShearEntityEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
+import io.papermc.paper.event.player.PlayerTradeEvent;
 import org.bukkit.inventory.EquipmentSlot;
 
 /**
@@ -75,6 +78,17 @@ public final class VillagerListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBreed(EntityBreedEvent event) {
+        if (!(event.getEntity() instanceof Villager child)
+                || !(event.getMother() instanceof Villager mother)
+                || !(event.getFather() instanceof Villager father)
+                || BV.villagers() == null) {
+            return;
+        }
+        BV.villagers().registerOffspring(child, mother, father);
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onChunkLoad(ChunkLoadEvent event) {
         for (Entity e : event.getChunk().getEntities()) {
@@ -90,7 +104,7 @@ public final class VillagerListener implements Listener {
             if (e instanceof Villager v) {
                 String uuid = v.getUniqueId().toString();
                 if (BV.villagers() != null) {
-                    BV.villagers().unregister(uuid);
+                    BV.villagers().unload(uuid);
                 }
             }
         }
@@ -101,13 +115,32 @@ public final class VillagerListener implements Listener {
         if (event.getEntity() instanceof Villager v) {
             String uuid = v.getUniqueId().toString();
             if (BV.villagers() != null) {
-                BV.villagers().unregister(uuid);
+                BV.villagers().removePermanently(uuid);
             }
+            return;
+        }
+        if (event.getEntity() instanceof Animals animal
+                && animal.getLastDamageCause() instanceof EntityDamageByEntityEvent damage
+                && damage.getDamager() instanceof Villager butcher
+                && BV.villagers() != null
+                && BV.villagers().get(butcher.getUniqueId().toString())
+                .map(v -> v.profession() == dev.bettervillagers.profession.Profession.BUTCHER)
+                .orElse(false)) {
+            for (org.bukkit.inventory.ItemStack drop : java.util.List.copyOf(event.getDrops())) {
+                butcher.getInventory().addItem(drop.clone()).values().forEach(leftover ->
+                        butcher.getWorld().dropItemNaturally(butcher.getLocation(), leftover));
+            }
+            event.getDrops().clear();
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onDamage(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Villager attacker && BV.villagers() != null) {
+            BV.villagers().get(attacker.getUniqueId().toString()).ifPresent(bv ->
+                    dev.bettervillagers.profession.EquipmentDurability.damage(
+                            attacker, bv.professionData(), 1.0));
+        }
         if (!(event.getEntity() instanceof Villager v)) {
             return;
         }
@@ -116,6 +149,25 @@ public final class VillagerListener implements Listener {
         }
         BV.villagers().get(v.getUniqueId().toString()).ifPresent(bv ->
                 BV.behavior().onDamaged(bv, event.getDamager()));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPlayerTrade(PlayerTradeEvent event) {
+        if (!(event.getMerchant() instanceof Villager villager) || BV.villagers() == null) {
+            return;
+        }
+        if (BV.regions() != null && BV.regions().isProtected(villager.getLocation())) {
+            return;
+        }
+        BV.villagers().get(villager.getUniqueId().toString()).ifPresent(bv -> {
+            if (BV.socialEngine() != null) {
+                BV.socialEngine().recordPlayerTrade(event.getPlayer(), bv, villager, event.getTrade());
+            } else {
+                dev.bettervillagers.profession.EquipmentDurability.repair(
+                        villager, bv.professionData(), Math.max(0.0, BV.config().raw().getDouble(
+                                "gameplay.equipment.repair-per-trade", 10.0)));
+            }
+        });
     }
 
     /** 幂等注册（已追踪则跳过）。 */

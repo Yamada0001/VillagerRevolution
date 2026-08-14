@@ -28,6 +28,9 @@ permissions:
   bettervillagers.admin:
     description: 完全管理权限
     default: op
+  bettervillagers.redstone.view:
+    description: 查看生电保护区列表、详情与边界
+    default: op
   bettervillagers.redstone.create:
     description: 创建生电保护区
     default: op

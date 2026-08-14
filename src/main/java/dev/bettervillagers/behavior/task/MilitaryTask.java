@@ -113,7 +113,7 @@ public final class MilitaryTask {
                 continue;
             }
             LivingEntity allyEnt = ally.entity();
-            if (allyEnt == null || allyEnt.isDead()) {
+            if (allyEnt == null) {
                 continue;
             }
             VillagerState allySt = ally.state();
@@ -121,19 +121,13 @@ public final class MilitaryTask {
             if (allySt == VillagerState.COMBAT || allySt == VillagerState.FLEEING) {
                 continue;
             }
-            // D5 修复：跨世界 distanceSquared 会抛 IllegalArgumentException，先校验世界一致性
-            if (allyEnt.getWorld() != threatLoc.getWorld()) {
-                continue;
-            }
-            double d = allyEnt.getLocation().distanceSquared(threatLoc);
-            if (d <= RALLY_RANGE_SQ) {
-                // D1 修复：Folia 多区域线程下，实体操控必须在实体所属区域线程执行。
-                // 此处仅做只读距离判断，写状态/移动操作 dispatch 到 ally 自身区域线程。
-                BV.scheduler().runForEntity(allyEnt, () -> {
+            BV.scheduler().runForEntity(allyEnt, () -> {
+                if (allyEnt.isValid() && !allyEnt.isDead() && allyEnt.getWorld() == threatLoc.getWorld()
+                        && allyEnt.getLocation().distanceSquared(threatLoc) <= RALLY_RANGE_SQ) {
                     ally.state(VillagerState.COMBAT);
                     MovementHelper.moveToward(allyEnt, threatLoc, PATROL_SPEED);
-                }, null);
-            }
+                }
+            }, null);
         }
     }
 
@@ -158,7 +152,10 @@ public final class MilitaryTask {
         if (target.getWorld() == null || !target.getWorld().equals(self.getWorld())) {
             return;
         }
-        double distSq = self.getLocation().distanceSquared(target);
+        Location current = self.getLocation();
+        double dx = current.getX() - target.getX();
+        double dz = current.getZ() - target.getZ();
+        double distSq = dx * dx + dz * dz;
         if (distSq <= ARRIVE_RADIUS_SQ) {
             // 到达当前航点，推进到下一个（循环闭合）
             idx = (idx + 1) % route.size();

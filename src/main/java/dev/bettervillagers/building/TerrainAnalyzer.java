@@ -8,9 +8,12 @@ import org.bukkit.block.Biome;
 import org.bukkit.block.Block;
 
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * Captures terrain on the correct region thread and analyzes it off-thread.
@@ -37,13 +40,19 @@ final class TerrainAnalyzer {
     );
 
     private final PerlinNoise noise;
+    private volatile Executor computeExecutor;
 
-    TerrainAnalyzer() {
-        this(0xB17D_ACE5L);
+    TerrainAnalyzer(Executor computeExecutor) {
+        this(0xB17D_ACE5L, computeExecutor);
     }
 
-    private TerrainAnalyzer(long seed) {
+    private TerrainAnalyzer(long seed, Executor computeExecutor) {
         this.noise = new PerlinNoise(seed);
+        this.computeExecutor = computeExecutor;
+    }
+
+    void computeExecutor(Executor computeExecutor) {
+        this.computeExecutor = computeExecutor;
     }
 
     CompletableFuture<SiteAssessment> assessAsync(Location center, int radius) {
@@ -51,50 +60,89 @@ final class TerrainAnalyzer {
             return CompletableFuture.completedFuture(null);
         }
         return captureSnapshotAsync(center, radius)
-                .thenApplyAsync(snapshot -> snapshot == null ? null : analyze(snapshot));
+                .thenApplyAsync(snapshot -> snapshot == null ? null : analyze(snapshot), computeExecutor);
     }
 
     private CompletableFuture<TerrainSnapshot> captureSnapshotAsync(Location center, int radius) {
-        CompletableFuture<TerrainSnapshot> future = new CompletableFuture<>();
         int size = radius * 2 + 1;
         int originX = center.getBlockX() - radius;
         int originZ = center.getBlockZ() - radius;
         World world = center.getWorld();
-        long seed = world.getSeed();
+        CompletableFuture<CaptureHeader> headerFuture = new CompletableFuture<>();
 
         BV.scheduler().runAtRegion(center, () -> {
             try {
                 int preferY = resolvePreferY(world, center);
-                int[] surfaceY = new int[size * size];
-                Material[] surfaceMat = new Material[size * size];
-                boolean[] blocked = new boolean[size * size];
                 String biomeKey = "plains";
                 try {
                     Biome biome = world.getBiome(center.getBlockX(), preferY, center.getBlockZ());
                     biomeKey = biome.getKey().getKey();
                 } catch (Throwable ignored) {
                 }
-
-                for (int localZ = 0; localZ < size; localZ++) {
-                    for (int localX = 0; localX < size; localX++) {
-                        int worldX = originX + localX;
-                        int worldZ = originZ + localZ;
-                        int index = localX + localZ * size;
-                        int y = sampleColumnSurfaceY(world, worldX, preferY, worldZ);
-                        surfaceY[index] = y;
-                        Block foot = world.getBlockAt(worldX, y, worldZ);
-                        surfaceMat[index] = foot.getType();
-                        blocked[index] = columnBlocked(world, worldX, y, worldZ, foot.getType());
-                    }
-                }
-
-                future.complete(new TerrainSnapshot(
-                        originX, originZ, size, size, surfaceY, surfaceMat, blocked, seed, biomeKey));
+                headerFuture.complete(new CaptureHeader(preferY, world.getSeed(), biomeKey));
             } catch (Throwable t) {
-                future.completeExceptionally(t);
+                headerFuture.completeExceptionally(t);
             }
         });
-        return future;
+        return headerFuture.thenCompose(header -> captureColumns(
+                world, originX, originZ, size, header));
+    }
+
+    private CompletableFuture<TerrainSnapshot> captureColumns(World world, int originX, int originZ,
+                                                               int size, CaptureHeader header) {
+        int[] surfaceY = new int[size * size];
+        Material[] surfaceMat = new Material[size * size];
+        boolean[] blocked = new boolean[size * size];
+        Map<Long, List<Column>> byChunk = new HashMap<>();
+        for (int localZ = 0; localZ < size; localZ++) {
+            for (int localX = 0; localX < size; localX++) {
+                int worldX = originX + localX;
+                int worldZ = originZ + localZ;
+                int chunkX = worldX >> 4;
+                int chunkZ = worldZ >> 4;
+                long key = ((long) chunkX << 32) ^ (chunkZ & 0xffffffffL);
+                byChunk.computeIfAbsent(key, ignored -> new ArrayList<>())
+                        .add(new Column(localX, localZ, worldX, worldZ));
+            }
+        }
+
+        List<CompletableFuture<Void>> captures = new ArrayList<>(byChunk.size());
+        for (List<Column> columns : byChunk.values()) {
+            Column first = columns.getFirst();
+            int chunkX = first.worldX() >> 4;
+            int chunkZ = first.worldZ() >> 4;
+            Location regionKey = new Location(world, (chunkX << 4) + 8, header.preferY(), (chunkZ << 4) + 8);
+            CompletableFuture<Void> capture = new CompletableFuture<>();
+            captures.add(capture);
+            BV.scheduler().runAtRegion(regionKey, () -> {
+                try {
+                    if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                        for (Column column : columns) {
+                            int index = column.localX() + column.localZ() * size;
+                            surfaceY[index] = header.preferY();
+                            surfaceMat[index] = Material.AIR;
+                            blocked[index] = true;
+                        }
+                    } else {
+                        for (Column column : columns) {
+                            int index = column.localX() + column.localZ() * size;
+                            int y = sampleColumnSurfaceY(world, column.worldX(), header.preferY(), column.worldZ());
+                            surfaceY[index] = y;
+                            Block foot = world.getBlockAt(column.worldX(), y, column.worldZ());
+                            surfaceMat[index] = foot.getType();
+                            blocked[index] = columnBlocked(
+                                    world, column.worldX(), y, column.worldZ(), foot.getType());
+                        }
+                    }
+                    capture.complete(null);
+                } catch (Throwable t) {
+                    capture.completeExceptionally(t);
+                }
+            });
+        }
+        return CompletableFuture.allOf(captures.toArray(CompletableFuture[]::new))
+                .thenApply(ignored -> new TerrainSnapshot(originX, originZ, size, size,
+                        surfaceY, surfaceMat, blocked, header.seed(), header.biomeKey()));
     }
 
     private boolean columnBlocked(World world, int x, int surfaceY, int z, Material footType) {
@@ -291,5 +339,11 @@ final class TerrainAnalyzer {
 
     static boolean isHardStructure(Material material) {
         return HARD_STRUCTURE.contains(material) || PROTECTED.contains(material);
+    }
+
+    private record CaptureHeader(int preferY, long seed, String biomeKey) {
+    }
+
+    private record Column(int localX, int localZ, int worldX, int worldZ) {
     }
 }

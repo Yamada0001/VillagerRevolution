@@ -13,12 +13,17 @@ import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.Container;
 import org.bukkit.block.Sign;
+import org.bukkit.block.TileState;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.LivingEntity;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -28,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 final class ConstructionJob {
 
-    private static final int STEPS_PER_TICK = 2;
+    private static final int STEPS_PER_TICK = 1;
     /** 单个工地最大工人数（原硬编码 8，规范：魔法值提取为常量）。 */
     private static final int MAX_WORKERS = 8;
     /** 工人到达判定距离平方（3 格）。 */
@@ -37,6 +42,7 @@ final class ConstructionJob {
     private static final double WORK_SPEED = 0.4;
 
     private final int villageId;
+    private final String jobId = java.util.UUID.randomUUID().toString();
     private final String type;
     private final String worldName;
     private final int centerX;
@@ -45,15 +51,22 @@ final class ConstructionJob {
     private final Location regionLocation;
     private final List<ConstructionStep> steps;
     private final AtomicInteger cursor = new AtomicInteger(0);
+    private final AtomicInteger pendingSteps = new AtomicInteger(0);
+    private final AtomicBoolean rollbackStarted = new AtomicBoolean();
     private final List<String> workerUuids = new CopyOnWriteArrayList<>();
+    private final Map<BlockPosition, String> originalBlocks = new ConcurrentHashMap<>();
+    private final CompletableFuture<Void> cancellationFuture = new CompletableFuture<>();
     private volatile ScheduledHandle handle;
     private volatile boolean finished;
+    private volatile boolean cancelling;
+    private volatile boolean finalizing;
+    private volatile boolean journalReady;
     private volatile String lastPhase = "";
     private final String displayName;
     private volatile BuildType buildType;
     private volatile BuildCache boundCache;
 
-    ConstructionJob(int villageId, String type, String worldName,
+    ConstructionJob(int villageId, String type, String worldName, Location regionLocation,
                     int centerX, int centerY, int centerZ,
                     List<ConstructionStep> steps, String displayName) {
         this.villageId = villageId;
@@ -62,10 +75,8 @@ final class ConstructionJob {
         this.centerX = centerX;
         this.centerY = centerY;
         this.centerZ = centerZ;
-        World world = Bukkit.getWorld(worldName);
-        this.regionLocation = world == null
-                ? null
-                : new Location(world, centerX + 0.5, centerY, centerZ + 0.5);
+        this.regionLocation = regionLocation == null ? null
+                : new Location(regionLocation.getWorld(), centerX + 0.5, centerY, centerZ + 0.5);
         this.steps = new ArrayList<>(steps);
         this.displayName = displayName;
         this.buildType = BuildType.fromCommand(type);
@@ -89,8 +100,12 @@ final class ConstructionJob {
         return villageId;
     }
 
+    String jobId() {
+        return jobId;
+    }
+
     boolean active() {
-        return !finished;
+        return !finished && !cancelling && !finalizing;
     }
 
     String teleportData() {
@@ -110,7 +125,7 @@ final class ConstructionJob {
             if (bv.villageId() != villageId && !inVillageRange(bv)) {
                 continue;
             }
-            if (!bv.isAlive() || bv.state() == VillagerState.SOCIALIZING) {
+            if (bv.entity() == null || bv.state() == VillagerState.SOCIALIZING) {
                 continue;
             }
             workerUuids.add(bv.uuid());
@@ -122,7 +137,7 @@ final class ConstructionJob {
         // 至少保证建筑师优先
         if (workerUuids.isEmpty()) {
             for (BVillager bv : BV.villagers().all()) {
-                if (bv.profession() == Profession.BUILDER && bv.isAlive()) {
+                if (bv.profession() == Profession.BUILDER && bv.entity() != null) {
                     workerUuids.add(bv.uuid());
                     bv.state(VillagerState.WORKING);
                     break;
@@ -132,8 +147,8 @@ final class ConstructionJob {
     }
 
     private boolean inVillageRange(BVillager bv) {
-        LivingEntity e = bv.entity();
-        if (e == null) {
+        BVillager.PositionSnapshot position = bv.lastKnownPosition();
+        if (position == null) {
             return false;
         }
         var opt = BV.villages().get(villageId);
@@ -141,8 +156,8 @@ final class ConstructionJob {
             return false;
         }
         var v = opt.get();
-        var loc = e.getLocation();
-        return v.covers(loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
+        return v.covers(position.world(), (int) Math.floor(position.x()),
+                (int) Math.floor(position.y()), (int) Math.floor(position.z()));
     }
 
     private static boolean isNonCombatWorker(Profession p) {
@@ -157,25 +172,48 @@ final class ConstructionJob {
 
     /** 启动全局定时施工循环（异步调度入口，写操作回区域线程）。 */
     void start() {
+        BV.scheduler().runAsync(() -> {
+            try {
+                BV.storage().constructionJournals().create(jobId);
+                journalReady = true;
+                if (cancelling) {
+                    beginRollbackWhenReady();
+                } else {
+                    BV.scheduler().runGlobal(this::startAfterJournalCreated);
+                }
+            } catch (Throwable t) {
+                BV.plugin().getLogger().log(java.util.logging.Level.SEVERE,
+                        "Unable to create construction journal " + jobId, t);
+                finished = true;
+                releaseCacheSlot();
+                releaseWorkers();
+                if (BV.building() != null) {
+                    BV.building().onJobCancelled(this);
+                }
+                cancellationFuture.complete(null);
+            }
+        });
+    }
+
+    private void startAfterJournalCreated() {
+        if (cancelling || finished) {
+            beginRollbackWhenReady();
+            return;
+        }
         assignWorkers();
-        BV.messages().broadcastClickable("building-started", teleportData(),
-                "structure", displayName);
+        BV.messages().broadcastClickable("building-started", teleportData(), "structure", displayName);
         handle = BV.scheduler().runGlobalTimer(this::tick, 10L, 4L);
     }
 
     void cancel() {
-        if (finished) {
+        if (finished || cancelling || finalizing) {
             return;
         }
-        finished = true;
+        cancelling = true;
         if (handle != null) {
             handle.cancel();
         }
-        releaseCacheSlot();
-        releaseWorkers();
-        if (BV.building() != null) {
-            BV.building().onJobCancelled(this);
-        }
+        beginRollbackWhenReady();
     }
 
     private void releaseCacheSlot() {
@@ -186,7 +224,7 @@ final class ConstructionJob {
     }
 
     private void tick() {
-        if (finished || regionLocation == null) {
+        if (finished || cancelling || finalizing || regionLocation == null) {
             return;
         }
         // 全局任务只负责投递，所有世界、区块与实体访问在目标区域线程执行。
@@ -194,11 +232,18 @@ final class ConstructionJob {
     }
 
     private void tickAtRegion() {
-        if (finished) {
+        if (finished || cancelling || finalizing) {
             return;
         }
         if (cursor.get() >= steps.size()) {
-            complete();
+            if (pendingSteps.get() == 0) {
+                complete();
+            }
+            return;
+        }
+        // The durable write-ahead log for one step must finish before the next
+        // step snapshots the same coordinate.
+        if (pendingSteps.get() > 0) {
             return;
         }
         // 规范 5.1：工地区块卸载时暂停 tick，避免 runAtRegion 强制加载/生成区块造成卡顿
@@ -216,7 +261,7 @@ final class ConstructionJob {
         for (int i = 0; i < STEPS_PER_TICK && cursor.get() < steps.size(); i++) {
             int idx = cursor.getAndIncrement();
             ConstructionStep step = steps.get(idx);
-            executeStep(step);
+            executeStep(step, idx);
         }
     }
 
@@ -252,7 +297,7 @@ final class ConstructionJob {
         });
     }
 
-    private void executeStep(ConstructionStep step) {
+    private void executeStep(ConstructionStep step, int sequence) {
         World world = regionLocation.getWorld();
         if (world == null) {
             return;
@@ -260,16 +305,75 @@ final class ConstructionJob {
         Location loc = new Location(world, step.x() + 0.5, step.y(), step.z() + 0.5);
         // 引导最近工人走向工地（非瞬间生成）
         guideNearestWorker(loc);
-        BV.scheduler().runAtRegion(loc, () -> applyStep(loc, step));
+        pendingSteps.incrementAndGet();
+        BV.scheduler().runAtRegion(loc, () -> prepareStep(loc, step, sequence));
     }
 
-    private void applyStep(Location loc, ConstructionStep step) {
+    private void prepareStep(Location loc, ConstructionStep step, int sequence) {
+        BV.guard().assertRegionThread(loc);
+        if (cancelling || finished) {
+            stepFinished();
+            return;
+        }
+        if (!loc.isChunkLoaded()) {
+            cursor.compareAndSet(sequence + 1, sequence);
+            stepFinished();
+            return;
+        }
+        if (BV.regions() != null && BV.regions().isProtected(worldName, step.x(), step.y(), step.z())) {
+            failStep(new IllegalStateException("Construction entered a protected region"));
+            stepFinished();
+            return;
+        }
+        Block block = loc.getBlock();
+        // Existing block entities may contain inventories, text, loot tables or plugin data.
+        // Construction never overwrites them, so rollback only needs lossless BlockData snapshots.
+        if (block.getState() instanceof TileState) {
+            failStep(new IllegalStateException("Construction would overwrite an existing block entity"));
+            stepFinished();
+            return;
+        }
+        String oldBlockData = block.getBlockData().getAsString();
+        originalBlocks.putIfAbsent(new BlockPosition(step.x(), step.y(), step.z()), oldBlockData);
+        dev.bettervillagers.storage.ConstructionChangeRecord change =
+                new dev.bettervillagers.storage.ConstructionChangeRecord(
+                        jobId, sequence, worldName, step.x(), step.y(), step.z(), oldBlockData);
+        BV.scheduler().runAsync(() -> {
+            try {
+                BV.storage().constructionJournals().append(change);
+                BV.scheduler().runAtRegion(loc, () -> {
+                    try {
+                        if (!cancelling && !finished) {
+                            if (BV.regions() != null
+                                    && BV.regions().isProtected(worldName, step.x(), step.y(), step.z())) {
+                                throw new IllegalStateException("Construction entered a protected region");
+                            }
+                            String current = loc.getBlock().getBlockData().getAsString();
+                            if (!current.equals(oldBlockData)) {
+                                throw new IllegalStateException("Block changed while construction step was pending");
+                            }
+                            applyRecordedStep(loc, step);
+                        }
+                    } catch (Throwable t) {
+                        failStep(t);
+                    } finally {
+                        stepFinished();
+                    }
+                });
+            } catch (Throwable t) {
+                failStep(t);
+                stepFinished();
+            }
+        });
+    }
+
+    private void applyRecordedStep(Location loc, ConstructionStep step) {
         BV.guard().assertRegionThread(loc);
         Block block = loc.getBlock();
         Material existing = block.getType();
         // 保护重要容器/工作站；硬结构仅允许 SITE_PREP 清理软障碍
         if (TerrainAnalyzer.isProtected(existing)) {
-            return;
+            throw new IllegalStateException("Construction collided with protected block " + existing);
         }
         if (step.kind() == ConstructionStep.Kind.BREAK) {
             if (!existing.isAir() && existing != Material.BEDROCK
@@ -284,6 +388,8 @@ final class ConstructionJob {
                 if (n.endsWith("_LEAVES") || !existing.isSolid() || n.contains("GRASS")) {
                     block.setType(Material.AIR, false);
                 }
+            } else if (!existing.isAir()) {
+                throw new IllegalStateException("Construction could not clear block " + existing);
             }
             return;
         }
@@ -292,15 +398,14 @@ final class ConstructionJob {
         }
         // 勿穿模既有石砖/原木结构（碰撞）
         if (TerrainAnalyzer.isHardStructure(existing) && existing.isSolid()) {
-            return;
+            throw new IllegalStateException("Construction collided with existing structure " + existing);
+        }
+        if (step.material() == null || step.material().isAir()) {
+            throw new IllegalArgumentException("Place step has no solid material");
         }
         // 放置前可拆除软固体
         if (existing.isSolid() && existing != step.material()) {
             block.setType(Material.AIR, false);
-        }
-        // 合理方块：跳过 AIR 误放
-        if (step.material() == null || step.material().isAir()) {
-            return;
         }
         // applyPhysics=false：尤其防止放置 WATER/FARMLAND 等触发物理/流体级联（规范 5.2）
         if (step.blockData() != null) {
@@ -348,14 +453,17 @@ final class ConstructionJob {
             }
             BVillager bv = opt.get();
             LivingEntity e = bv.entity();
-            if (e == null || e.isDead() || bv.state() == VillagerState.SOCIALIZING) {
+            BVillager.PositionSnapshot position = bv.lastKnownPosition();
+            if (e == null || position == null || bv.state() == VillagerState.SOCIALIZING) {
                 continue;
             }
-            // 跨世界 distanceSquared 会抛 IllegalArgumentException，先校验世界一致（规范 5.x）
-            if (!e.getWorld().equals(target.getWorld())) {
+            if (target.getWorld() == null || !position.world().equals(target.getWorld().getName())) {
                 continue;
             }
-            double d = e.getLocation().distanceSquared(target);
+            double dx = position.x() - target.getX();
+            double dy = position.y() - target.getY();
+            double dz = position.z() - target.getZ();
+            double d = dx * dx + dy * dy + dz * dz;
             if (d < bestD) {
                 bestD = d;
                 best = bv;
@@ -365,7 +473,11 @@ final class ConstructionJob {
             return;
         }
         BVillager worker = best;
-        BV.scheduler().runForEntity(worker.entity(), () -> {
+        LivingEntity scheduledEntity = worker.entity();
+        if (scheduledEntity == null) {
+            return;
+        }
+        BV.scheduler().runForEntity(scheduledEntity, () -> {
             LivingEntity e = worker.entity();
             if (e == null || worker.state() == VillagerState.SOCIALIZING) {
                 return;
@@ -379,16 +491,94 @@ final class ConstructionJob {
     }
 
     private void complete() {
-        finished = true;
+        if (finished || cancelling || finalizing) {
+            return;
+        }
+        finalizing = true;
         if (handle != null) {
             handle.cancel();
         }
-        releaseWorkers();
-        BV.messages().broadcastClickable("building-completed", teleportData(),
-                "structure", displayName);
         if (BV.building() != null) {
             BV.building().onJobCompleted(this);
         }
+    }
+
+    private void failStep(Throwable failure) {
+        BV.plugin().getLogger().log(java.util.logging.Level.SEVERE,
+                "Construction job " + jobId + " failed and will be rolled back", failure);
+        cancelling = true;
+        if (handle != null) {
+            handle.cancel();
+        }
+    }
+
+    private void stepFinished() {
+        int remaining = pendingSteps.decrementAndGet();
+        if (remaining < 0) {
+            pendingSteps.compareAndSet(remaining, 0);
+            remaining = 0;
+        }
+        if (cancelling && remaining == 0) {
+            beginRollbackWhenReady();
+        }
+    }
+
+    private void beginRollbackWhenReady() {
+        if (!cancelling || pendingSteps.get() != 0 || !journalReady
+                || !rollbackStarted.compareAndSet(false, true)) {
+            return;
+        }
+        if (BV.building() != null) {
+            BV.building().rollbackJob(this);
+        }
+    }
+
+    void rollbackCompleted() {
+        finished = true;
+        releaseCacheSlot();
+        releaseWorkers();
+        if (BV.building() != null) {
+            BV.building().onJobCancelled(this);
+        }
+        cancellationFuture.complete(null);
+    }
+
+    void rollbackFailed(Throwable failure) {
+        cancellationFuture.completeExceptionally(failure);
+    }
+
+    CompletableFuture<Void> cancellationFuture() {
+        return cancellationFuture;
+    }
+
+    boolean rollbackRequested() {
+        return cancelling;
+    }
+
+    /** Paper runs disable on its world-owning primary thread, so restore immediately there. */
+    void restoreOnPaperShutdown() {
+        World world = regionLocation == null ? null : regionLocation.getWorld();
+        if (world == null) {
+            return;
+        }
+        for (Map.Entry<BlockPosition, String> entry : originalBlocks.entrySet()) {
+            BlockPosition position = entry.getKey();
+            world.getBlockAt(position.x(), position.y(), position.z())
+                    .setBlockData(Bukkit.createBlockData(entry.getValue()), false);
+        }
+    }
+
+    void commitCompleted() {
+        finalizing = false;
+        finished = true;
+        releaseWorkers();
+        BV.messages().broadcastClickable("building-completed", teleportData(),
+                "structure", displayName);
+    }
+
+    void prepareRollbackAfterCommitFailure() {
+        finalizing = false;
+        cancelling = true;
     }
 
     private void releaseWorkers() {
@@ -403,5 +593,8 @@ final class ConstructionJob {
             });
         }
         workerUuids.clear();
+    }
+
+    private record BlockPosition(int x, int y, int z) {
     }
 }
