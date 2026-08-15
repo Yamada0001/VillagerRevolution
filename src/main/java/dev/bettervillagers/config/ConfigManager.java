@@ -76,7 +76,7 @@ public final class ConfigManager {
     }
 
     public int strategicInterval() {
-        return config.getInt("performance.strategic-interval", 60);
+        return config.getInt("performance.strategic-interval", 30);
     }
 
     public int villageEntryRangeExtra() {

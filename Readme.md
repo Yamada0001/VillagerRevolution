@@ -336,7 +336,7 @@ features:
 performance:
   max-active-ai-villagers: 50
   ai-update-interval: 5
-  strategic-interval: 60
+  strategic-interval: 30
 
 storage:
   type: "sqlite"   # 或 mysql

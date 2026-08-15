@@ -21,5 +21,10 @@ class VillageActivityManagerTest {
                 VillageActivityManager.Activity.DEFENSE_DRILL, Profession.FARMER));
         assertTrue(VillageActivityManager.participates(
                 VillageActivityManager.Activity.BUILDING_CONTEST, Profession.BUILDER));
+<<<<<<< Updated upstream
+=======
+        assertEquals("activity.trade_fair",
+                VillageActivityManager.Activity.TRADE_FAIR.translationKey());
+>>>>>>> Stashed changes
     }
 }

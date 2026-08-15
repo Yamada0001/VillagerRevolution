@@ -3,6 +3,7 @@ package dev.bettervillagers.behavior.strategic;
 import dev.bettervillagers.BV;
 import dev.bettervillagers.ai.AIContext;
 import dev.bettervillagers.ai.AIResult;
+import dev.bettervillagers.building.BuildingManager;
 import dev.bettervillagers.building.BuildType;
 import dev.bettervillagers.profession.ProfessionData;
 import dev.bettervillagers.village.Village;
@@ -24,13 +25,17 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class StrategicAI {
 
     private final long intervalMillis;
-    private static final long COMMAND_COOLDOWN_MS = 90_000L;
-    private static final int MAX_PARALLEL_SAME_PHASE = 2;
+    private static final int DEFAULT_MAX_PARALLEL_SAME_PHASE = 3;
     /** Minecraft 夜间起始/结束 tick（与 SocialEngine 共用语义）。 */
     private static final long NIGHT_START_TICKS = 13000L;
     private static final long NIGHT_END_TICKS = 23000L;
+<<<<<<< Updated upstream
     /** 夜间跳过战略决策的概率（原硬编码 0.7）。 */
     private static final double NIGHT_SKIP_PROBABILITY = 0.7;
+=======
+    /** Sleeping hours may defer ordinary development, but emergency housing always bypasses this. */
+    private static final double DEFAULT_NIGHT_SKIP_PROBABILITY = 0.25;
+>>>>>>> Stashed changes
     private final Set<Integer> planningVillages = ConcurrentHashMap.newKeySet();
     private final Map<Integer, Long> lastCommandTime = new ConcurrentHashMap<>();
     private volatile boolean shutdown;
@@ -64,18 +69,27 @@ public final class StrategicAI {
             BV.diplomacy().review(king, village);
         }
         if (BV.activities() != null) {
+<<<<<<< Updated upstream
             BV.activities().tick(village);
+=======
+            BV.activities().tick(village, king);
+>>>>>>> Stashed changes
         }
         if (!BV.config().feature("autonomous-building")) {
             return;
         }
         Long lastCmd = lastCommandTime.get(king.villageId());
-        if (lastCmd != null && now - lastCmd < COMMAND_COOLDOWN_MS) {
+        long commandCooldownMillis = Math.max(10L, BV.config().raw().getLong(
+                "building.king-command-cooldown-seconds", 45L)) * 1000L;
+        if (lastCmd != null && now - lastCmd < commandCooldownMillis) {
+            debugDeferred(village.id(), "command-cooldown");
             return;
         }
         if (planningVillages.contains(king.villageId())) {
+            debugDeferred(village.id(), "site-planning-in-progress");
             return;
         }
+<<<<<<< Updated upstream
         if (king.entity() != null) {
             long worldTime = king.entity().getWorld().getTime();
             if (worldTime >= NIGHT_START_TICKS && worldTime <= NIGHT_END_TICKS
@@ -83,19 +97,43 @@ public final class StrategicAI {
                 return;
             }
         }
+=======
+>>>>>>> Stashed changes
         if (BV.building() == null) {
             return;
         }
         int pop = BV.villages().countVillagersInVillage(village.id());
-        BuildType.DevPhase phase = BV.building().currentPhase(village.id(), pop);
+        var housing = BV.building().housingStatus(village.id(), pop,
+                BV.config().raw().getInt("building.housing.emergency-minimum-population", 12),
+                BV.config().raw().getInt("building.housing.residents-per-house", 4),
+                BV.config().raw().getInt("building.housing.reserve-houses", 1));
+        if (!housing.shortage() && king.entity() != null) {
+            long worldTime = king.entity().getWorld().getTime();
+            double nightSkipProbability = Math.clamp(BV.config().raw().getDouble(
+                    "building.king-night-skip-probability", DEFAULT_NIGHT_SKIP_PROBABILITY), 0.0, 1.0);
+            if (worldTime >= NIGHT_START_TICKS && worldTime <= NIGHT_END_TICKS
+                    && Math.random() < nightSkipProbability) {
+                debugDeferred(village.id(), "night-rest");
+                return;
+            }
+        }
+        BuildType.DevPhase phase = housing.shortage()
+                ? BuildType.DevPhase.HOUSING : BV.building().currentPhase(village.id(), pop);
 
-        // 同阶段可并行（上限 MAX_PARALLEL），跨阶段串行：本村有其它阶段施工时等待
+        int normalParallelLimit = Math.clamp(BV.config().raw().getInt(
+                "building.max-parallel-per-phase", DEFAULT_MAX_PARALLEL_SAME_PHASE), 1, 8);
+        int housingParallelLimit = Math.clamp(BV.config().raw().getInt(
+                "building.housing.max-parallel-builds", 4), 2, 8);
+        int parallelLimit = housing.shortage() ? housingParallelLimit : normalParallelLimit;
+        // 同阶段可并行；跨阶段仍串行，避免两套规划争抢同一片区域。
         int same = BV.building().activeJobsInPhase(village.id(), phase);
-        if (same >= MAX_PARALLEL_SAME_PHASE) {
+        if (same >= parallelLimit) {
+            debugDeferred(village.id(), "parallel-limit");
             return;
         }
         if (same == 0 && BV.building().isVillageBuilding(village.id())) {
             // 本村有施工但不是当前发展阶段：等待完成后再跨阶段
+            debugDeferred(village.id(), "other-phase-active");
             return;
         }
 
@@ -107,6 +145,15 @@ public final class StrategicAI {
         }
 
         planningVillages.add(village.id());
+        if (housing.shortage()) {
+            int batchSize = housingBatchSize(housing, same, housingParallelLimit);
+            if (batchSize <= 0) {
+                planningVillages.remove(village.id());
+                return;
+            }
+            BV.scheduler().runGlobal(() -> dispatchHousingPlan(king, village, housing, batchSize));
+            return;
+        }
         ProfessionData pd = king.professionData();
         double bravery = pd != null ? pd.personality().bravery() : 0.3;
         double greed = pd != null ? pd.personality().greed() : 0.3;
@@ -159,13 +206,12 @@ public final class StrategicAI {
             boolean isDegraded = result == null || !result.isUsable();
             if (!isDegraded) {
                 String upper = result.text().toUpperCase();
-                if (upper.contains("HOLD")) {
-                    return;
-                }
-                BuildType parsed = BuildType.fromCommand(upper);
-                // 严格阶段约束：AI 不得跳阶段
-                if (parsed != null && parsed.physical() && parsed.phase() == phase) {
-                    type = parsed;
+                if (!upper.contains("HOLD")) {
+                    BuildType parsed = BuildType.fromCommand(upper);
+                    // 严格阶段约束：AI 不得跳阶段
+                    if (parsed != null && parsed.physical() && parsed.phase() == phase) {
+                        type = parsed;
+                    }
                 }
             }
             // 推荐结果本身必须满足当前阶段，避免异常配置导致空指针或跨阶段建造。
@@ -181,6 +227,7 @@ public final class StrategicAI {
             final String notificationName = displayName;
             BV.scheduler().runGlobal(() -> dispatchPlan(king, village, finalType, notificationName));
             dispatched = true;
+<<<<<<< Updated upstream
         } finally {
             if (!dispatched) {
                 planningVillages.remove(village.id());
@@ -204,9 +251,125 @@ public final class StrategicAI {
                 BV.building().issueTask(type.name(), village.id(), center);
             });
             notifyVillagePlayers(village, king.name(), notificationName);
+=======
+>>>>>>> Stashed changes
         } finally {
-            planningVillages.remove(village.id());
+            if (!dispatched) {
+                planningVillages.remove(village.id());
+            }
         }
+    }
+
+    private void dispatchPlan(BVillager king, Village village, BuildType type, String notificationName) {
+        if (!isRunning() || !BV.config().feature("autonomous-building")) {
+            planningVillages.remove(village.id());
+            return;
+        }
+        org.bukkit.Location center = pickSite(village, type);
+        if (center == null || center.getWorld() == null) {
+            planningVillages.remove(village.id());
+            return;
+        }
+        scheduleIssue(village, type, center, false).whenComplete((started, failure) -> {
+            try {
+                if (failure != null) {
+                    logRejected(village.id(), type, failure);
+                } else if (Boolean.TRUE.equals(started)) {
+                    recordSuccessfulCommand(village, king.name(), notificationName);
+                } else {
+                    logRejected(village.id(), type, null);
+                }
+            } finally {
+                planningVillages.remove(village.id());
+            }
+        });
+    }
+
+    private void dispatchHousingPlan(BVillager king, Village village,
+                                     BuildingManager.HousingStatus housing, int batchSize) {
+        if (!isRunning() || !BV.config().feature("autonomous-building")) {
+            planningVillages.remove(village.id());
+            return;
+        }
+        java.util.List<org.bukkit.Location> sites = pickHousingSites(village, batchSize);
+        if (sites.isEmpty()) {
+            planningVillages.remove(village.id());
+            return;
+        }
+        java.util.List<java.util.concurrent.CompletableFuture<Boolean>> attempts = sites.stream()
+                .map(site -> scheduleIssue(village, BuildType.HOUSE, site, true))
+                .toList();
+        java.util.concurrent.CompletableFuture.allOf(
+                attempts.toArray(java.util.concurrent.CompletableFuture[]::new))
+                .whenComplete((ignored, failure) -> {
+                    try {
+                        int started = (int) attempts.stream()
+                                .filter(attempt -> attempt.isDone() && !attempt.isCompletedExceptionally()
+                                        && Boolean.TRUE.equals(attempt.join()))
+                                .count();
+                        if (started > 0) {
+                            String command = BV.messages().raw("king-housing-command")
+                                    .replace("{population}", String.valueOf(housing.population()))
+                                    .replace("{houses}", String.valueOf(housing.housingUnits()))
+                                    .replace("{required}", String.valueOf(housing.requiredHousingUnits()))
+                                    .replace("{count}", String.valueOf(started));
+                            recordSuccessfulCommand(village, king.name(), command);
+                        } else {
+                            logRejected(village.id(), BuildType.HOUSE, failure);
+                        }
+                    } finally {
+                        planningVillages.remove(village.id());
+                    }
+                });
+    }
+
+    private java.util.concurrent.CompletableFuture<Boolean> scheduleIssue(
+            Village village, BuildType type, org.bukkit.Location center, boolean exactType) {
+        java.util.concurrent.CompletableFuture<Boolean> result = new java.util.concurrent.CompletableFuture<>();
+        try {
+            BV.scheduler().runAtRegion(center, () -> {
+                try {
+                    int surfaceY = center.getWorld().getHighestBlockYAt(
+                            center.getBlockX(), center.getBlockZ(),
+                            org.bukkit.HeightMap.MOTION_BLOCKING_NO_LEAVES) + 1;
+                    center.setY(surfaceY);
+                    java.util.concurrent.CompletableFuture<Boolean> issue = exactType
+                            ? BV.building().issueExactTask(type.name(), village.id(), center)
+                            : BV.building().issueTask(type.name(), village.id(), center);
+                    issue.whenComplete((started, failure) -> {
+                        if (failure != null) {
+                            result.completeExceptionally(failure);
+                        } else {
+                            result.complete(Boolean.TRUE.equals(started));
+                        }
+                    });
+                } catch (Throwable failure) {
+                    result.completeExceptionally(failure);
+                }
+            });
+        } catch (Throwable failure) {
+            result.completeExceptionally(failure);
+        }
+        return result.orTimeout(60, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    private void recordSuccessfulCommand(Village village, String kingName, String notification) {
+        lastCommandTime.put(village.id(), System.currentTimeMillis());
+        if (isRunning()) {
+            BV.scheduler().runGlobal(() -> {
+                if (isRunning()) {
+                    notifyVillagePlayers(village, kingName, notification);
+                }
+            });
+        }
+    }
+
+    private void logRejected(int villageId, BuildType type, Throwable failure) {
+        String error = failure == null ? "site-rejected" : String.valueOf(failure.getMessage());
+        BV.plugin().getLogger().info(BV.messages().raw("log.king-building-rejected")
+                .replace("{village}", String.valueOf(villageId))
+                .replace("{type}", type.name())
+                .replace("{error}", error));
     }
 
     public void shutdown() {
@@ -240,6 +403,50 @@ public final class StrategicAI {
                     player.sendMessage(dev.bettervillagers.i18n.MessageService.deserialize(message));
                 }
             }, null));
+<<<<<<< Updated upstream
+=======
+    }
+
+    static int housingBatchSize(BuildingManager.HousingStatus housing,
+                                int activeHousingPhaseJobs, int parallelLimit) {
+        if (housing == null || !housing.shortage()) {
+            return 0;
+        }
+        int missingHousing = Math.max(0,
+                housing.requiredHousingUnits() - housing.housingUnits());
+        int availableSlots = Math.max(0, parallelLimit - Math.max(0, activeHousingPhaseJobs));
+        return Math.min(missingHousing, availableSlots);
+    }
+
+    private java.util.List<org.bukkit.Location> pickHousingSites(Village village, int count) {
+        org.bukkit.World world = org.bukkit.Bukkit.getWorld(village.world());
+        if (world == null || count <= 0) {
+            return java.util.List.of();
+        }
+        org.bukkit.Location base = new org.bukkit.Location(
+                world, village.centerX(), village.centerY(), village.centerZ());
+        int existing = BV.building().cache().count(village.id(), BuildType.HOUSE);
+        double startAngle = java.util.concurrent.ThreadLocalRandom.current().nextDouble(Math.PI * 2);
+        java.util.List<org.bukkit.Location> sites = new java.util.ArrayList<>(count);
+        for (int offset = 0; offset < count; offset++) {
+            int sequence = existing + offset;
+            int ring = sequence / 6;
+            int slot = sequence % 6;
+            double radius = 20.0 + ring * 10.0;
+            double angle = startAngle + slot * (Math.PI * 2 / 6.0) + ring * (Math.PI / 6.0);
+            sites.add(base.clone().add(Math.cos(angle) * radius, 0, Math.sin(angle) * radius));
+        }
+        return sites;
+    }
+
+    private void debugDeferred(int villageId, String reason) {
+        if (!BV.config().debugMode()) {
+            return;
+        }
+        BV.plugin().getLogger().info(BV.messages().raw("log.king-building-deferred")
+                .replace("{village}", String.valueOf(villageId))
+                .replace("{reason}", reason));
+>>>>>>> Stashed changes
     }
 
     /**

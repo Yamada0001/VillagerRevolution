@@ -6,11 +6,7 @@ load: POSTWORLD
 author: Yamada0001
 description: 赋予 Minecraft 村民智能 AI 行为系统
 website: https://github.com/Yamada0001/VillagerRevolution/
-
-# 规范 0.1：Folia 区域化多线程支持声明
 folia-supported: true
-
-# CraftEngine 提供可选的自定义物品与资源包 API。
 softdepend: [CraftEngine]
 
 commands:

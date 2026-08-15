@@ -134,27 +134,49 @@ public final class BuildingManager {
         return activeJobs.size();
     }
 
+<<<<<<< Updated upstream
     public void issueTask(String typeName, int villageId, Location center) {
         if (!BV.config().feature("autonomous-building") || center == null || center.getWorld() == null) {
             return;
+=======
+    public java.util.concurrent.CompletableFuture<Boolean> issueTask(
+            String typeName, int villageId, Location center) {
+        return issueTask(typeName, villageId, center, false);
+    }
+
+    /** Emergency plans use the exact requested type and do not allow builder AI to substitute it. */
+    public java.util.concurrent.CompletableFuture<Boolean> issueExactTask(
+            String typeName, int villageId, Location center) {
+        return issueTask(typeName, villageId, center, true);
+    }
+
+    private java.util.concurrent.CompletableFuture<Boolean> issueTask(
+            String typeName, int villageId, Location center, boolean exactType) {
+        if (!BV.config().feature("autonomous-building") || center == null || center.getWorld() == null) {
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
+>>>>>>> Stashed changes
         }
         BuildType type = BuildType.fromCommand(typeName);
         if (type == null) {
-            return;
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
         }
         if (!type.physical()) {
             String displayName = display(type);
             BV.scheduler().runGlobal(() -> BV.messages().broadcast("building-started", "structure", displayName));
             BV.scheduler().runAsyncDelayed(() -> BV.scheduler().runGlobal(() ->
                     BV.messages().broadcast("building-completed", "structure", displayName)), 100L);
+<<<<<<< Updated upstream
             return;
+=======
+            return java.util.concurrent.CompletableFuture.completedFuture(true);
+>>>>>>> Stashed changes
         }
         if (cache.count(villageId, type) >= type.maxPerVillage()) {
             BV.plugin().getLogger().info(
                     BV.messages().raw("log.building-cache-full")
                             .replace("{type}", type.name())
                             .replace("{village}", String.valueOf(villageId)));
-            return;
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
         }
 
         Location candidate = type == BuildType.ROAD ? center.clone() : cache.findFreeLocation(villageId, type, center);
@@ -162,7 +184,7 @@ public final class BuildingManager {
             BV.plugin().getLogger().info(BV.messages().raw("log.building-no-slot")
                     .replace("{type}", type.name())
                     .replace("{village}", String.valueOf(villageId)));
-            return;
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
         }
 
         RoadLayout.Reservation reservation = type == BuildType.ROAD ? roads.takeReservation(villageId, candidate) : null;
@@ -173,6 +195,7 @@ public final class BuildingManager {
                         initialTemplate.transformedDepth(initialPlacement)) / 2 + 1;
 
         String worldName = center.getWorld().getName();
+<<<<<<< Updated upstream
         analyzer.assessAsync(candidate, radius).thenCompose(assessment -> {
             if (assessment == null || !assessment.suitable()) {
                 roads.rollback(villageId, reservation);
@@ -181,10 +204,24 @@ public final class BuildingManager {
             }
             return consultBuilderAi(type, assessment).thenAccept(approved ->
                     startApprovedBuild(villageId, worldName, candidate, reservation, assessment, type, approved));
+=======
+        return analyzer.assessAsync(candidate, radius).thenCompose(assessment -> {
+            if (assessment == null || !assessment.suitable()) {
+                roads.rollback(villageId, reservation);
+                logUnsuitable(type.name());
+                return java.util.concurrent.CompletableFuture.completedFuture(false);
+            }
+            java.util.concurrent.CompletableFuture<BuildType> approval = exactType
+                    ? java.util.concurrent.CompletableFuture.completedFuture(type)
+                    : consultBuilderAi(type, assessment);
+            return approval.thenCompose(approved -> startApprovedBuild(
+                    villageId, worldName, candidate, reservation, assessment, type, approved));
+>>>>>>> Stashed changes
         }).exceptionally(failure -> {
             roads.rollback(villageId, reservation);
             BV.plugin().getLogger().log(java.util.logging.Level.SEVERE,
                     "Unable to prepare construction task " + type + " for village " + villageId, failure);
+<<<<<<< Updated upstream
             return null;
         });
     }
@@ -192,11 +229,21 @@ public final class BuildingManager {
     private void startApprovedBuild(int villageId, String worldName, Location candidate,
                                     RoadLayout.Reservation reservation,
                                     SiteAssessment assessment, BuildType requested, BuildType approved) {
+=======
+            return false;
+        });
+    }
+
+    private java.util.concurrent.CompletableFuture<Boolean> startApprovedBuild(
+            int villageId, String worldName, Location candidate,
+            RoadLayout.Reservation reservation,
+            SiteAssessment assessment, BuildType requested, BuildType approved) {
+>>>>>>> Stashed changes
         if (!BV.config().feature("autonomous-building") || BV.villages().get(villageId).isEmpty()
                 || candidate.getWorld() == null || !candidate.getWorld().getName().equals(worldName)
                 || approved == null || approved == BuildType.DESTROY && requested != BuildType.DESTROY) {
             roads.rollback(villageId, reservation);
-            return;
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
         }
         StructureTemplate template = reservation == null
                 ? templates.choose(approved, assessment.biomeKey(), assessment.seed(),
@@ -236,6 +283,7 @@ public final class BuildingManager {
             }
         }
 
+<<<<<<< Updated upstream
         if (touchesProtectedRegion(worldName, steps)) {
             roads.rollback(villageId, reservation);
             return;
@@ -265,8 +313,93 @@ public final class BuildingManager {
                 clusterId));
         if (reservation != null) {
             pendingRoads.put(job, new PendingRoad(candidate.clone(), reservation));
+=======
+        if (steps.isEmpty() || touchesProtectedRegion(worldName, steps)) {
+            roads.rollback(villageId, reservation);
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
         }
-        job.start();
+
+        int finalMinX = minX;
+        int finalMaxX = maxX;
+        int finalMinZ = minZ;
+        int finalMaxZ = maxZ;
+        String finalTemplateId = templateId;
+        String finalClusterId = clusterId;
+        List<ConstructionStep> finalSteps = List.copyOf(steps);
+        int maxBuildY = finalSteps.stream().mapToInt(ConstructionStep::y)
+                .max().orElse(assessment.targetLevelY());
+        int horizontalBuffer = BV.config().raw().getInt(
+                "building.site-clearance.horizontal-buffer", 2);
+        int verticalBuffer = BV.config().raw().getInt(
+                "building.site-clearance.vertical-buffer", 2);
+        java.util.concurrent.CompletableFuture<TerrainAnalyzer.ClearanceAssessment> clearanceFuture =
+                approved == BuildType.DESTROY
+                        ? java.util.concurrent.CompletableFuture.completedFuture(
+                                new TerrainAnalyzer.ClearanceAssessment(0, 0, 0))
+                        : analyzer.validateClearanceAsync(candidate.getWorld(),
+                                finalMinX, finalMaxX, finalMinZ, finalMaxZ,
+                                assessment.targetLevelY(), maxBuildY,
+                                horizontalBuffer, verticalBuffer);
+
+        return clearanceFuture.thenApply(clearance -> {
+            if (clearance == null || !clearance.clear()) {
+                roads.rollback(villageId, reservation);
+                logObstructed(approved, clearance);
+                return false;
+            }
+            return startClearedBuild(villageId, worldName, candidate, reservation,
+                    assessment, approved, placement, finalSteps,
+                    finalTemplateId, finalClusterId,
+                    finalMinX, finalMaxX, finalMinZ, finalMaxZ);
+        });
+    }
+
+    private boolean startClearedBuild(
+            int villageId, String worldName, Location candidate,
+            RoadLayout.Reservation reservation, SiteAssessment assessment,
+            BuildType approved, StructureTemplate.Placement placement,
+            List<ConstructionStep> steps, String templateId, String clusterId,
+            int minX, int maxX, int minZ, int maxZ) {
+        if (!cache.tryOccupy(villageId, approved, worldName,
+                assessment.centerX(), assessment.centerZ(), minX, maxX, minZ, maxZ)) {
+            roads.rollback(villageId, reservation);
+            return false;
+        }
+
+        ConstructionJob job = null;
+        try {
+            job = new ConstructionJob(villageId, approved.name(), worldName, candidate,
+                    assessment.centerX(), assessment.targetLevelY(), assessment.centerZ(),
+                    steps, display(approved));
+            job.bindCache(cache, approved);
+            activeJobs.add(job);
+            plannedLayouts.put(job, new BuildLayoutRecord(villageId, worldName, approved.name(),
+                    templateId, assessment.centerX(), assessment.targetLevelY(), assessment.centerZ(),
+                    minX, maxX, minZ, maxZ,
+                    placement == null ? StructureTemplate.Rotation.NONE.name() : placement.rotation().name(),
+                    placement == null ? StructureTemplate.Mirror.NONE.name() : placement.mirror().name(),
+                    clusterId));
+            if (reservation != null) {
+                pendingRoads.put(job, new PendingRoad(candidate.clone(), reservation));
+            }
+            job.start();
+            return true;
+        } catch (Throwable failure) {
+            if (job != null) {
+                activeJobs.remove(job);
+                plannedLayouts.remove(job);
+                pendingRoads.remove(job);
+                try {
+                    job.cancel();
+                } catch (Throwable ignored) {
+                }
+            }
+            cache.releaseOnCancel(villageId, approved, worldName,
+                    assessment.centerX(), assessment.centerZ());
+            roads.rollback(villageId, reservation);
+            throw new java.util.concurrent.CompletionException(failure);
+>>>>>>> Stashed changes
+        }
     }
 
     private static int defaultHalfSize(BuildType type) {
@@ -288,6 +421,17 @@ public final class BuildingManager {
     private void logUnsuitable(String type) {
         BV.plugin().getLogger().info(
                 BV.messages().raw("log.building-terrain-unsuitable").replace("{type}", type));
+    }
+
+    private void logObstructed(BuildType type, TerrainAnalyzer.ClearanceAssessment clearance) {
+        int footprint = clearance == null ? -1 : clearance.footprintObstacles();
+        int surroundings = clearance == null ? -1 : clearance.surroundingsObstacles();
+        int unloaded = clearance == null ? -1 : clearance.unloadedChunks();
+        BV.plugin().getLogger().info(BV.messages().raw("log.building-clearance-obstructed")
+                .replace("{type}", type.name())
+                .replace("{footprint}", String.valueOf(footprint))
+                .replace("{surroundings}", String.valueOf(surroundings))
+                .replace("{unloaded}", String.valueOf(unloaded)));
     }
 
     private String display(BuildType type) {
@@ -615,6 +759,28 @@ public final class BuildingManager {
                 yield BuildType.WALL;
             }
         };
+    }
+
+    public HousingStatus housingStatus(int villageId, int population,
+                                       int minimumPopulation, int residentsPerHouse, int reserveHouses) {
+        int housingUnits = cache.count(villageId, BuildType.HOUSE)
+                + cache.count(villageId, BuildType.UPGRADE_HOUSE);
+        return evaluateHousing(population, housingUnits, minimumPopulation, residentsPerHouse, reserveHouses);
+    }
+
+    static HousingStatus evaluateHousing(int population, int housingUnits,
+                                         int minimumPopulation, int residentsPerHouse, int reserveHouses) {
+        int safePopulation = Math.max(0, population);
+        int safeHousing = Math.max(0, housingUnits);
+        int safeMinimumPopulation = Math.max(1, minimumPopulation);
+        int safeResidentsPerHouse = Math.max(1, residentsPerHouse);
+        int safeReserve = Math.max(0, reserveHouses);
+        int required = Math.ceilDiv(safePopulation, safeResidentsPerHouse) + safeReserve;
+        return new HousingStatus(safePopulation, safeHousing, required,
+                safePopulation >= safeMinimumPopulation && safeHousing < required);
+    }
+
+    public record HousingStatus(int population, int housingUnits, int requiredHousingUnits, boolean shortage) {
     }
 
     private record PendingRoad(Location site, RoadLayout.Reservation reservation) {

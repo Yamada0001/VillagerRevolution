@@ -1,9 +1,7 @@
 # BetterVillagers 语言文件（简体中文）
-# 规范 6.2 / 用户规则：所有用户可见文本必须经由此处，禁止硬编码
 messages:
   prefix: "<gradient:#eea2a2:#7ac5d8>[</gradient><gradient:#6a11cb:#2575fc>BetterVillagers</gradient><gradient:#eea2a2:#7ac5d8>] </gradient>"
 
-  # ---------- 通用 ----------
   no-permission: "<gradient:#f093fb:#f5576c>你没有权限执行此操作。</gradient>"
   player-only: "<gradient:#f093fb:#f5576c>该命令只能由玩家执行。</gradient>"
   unknown-command: "<gradient:#f093fb:#f5576c>未知子命令，使用 </gradient><gradient:#fa709a:#fee140>/bv help </gradient><gradient:#f093fb:#f5576c>查看帮助。</gradient>"
@@ -12,19 +10,16 @@ messages:
   help-line: "<gradient:#fa709a:#fee140>{usage} </gradient><gradient:#eea2a2:#7ac5d8>- {desc}</gradient>"
   help-select-hint: "<gradient:#eea2a2:#7ac5d8>使用 </gradient><gradient:#fa709a:#fee140>/bv sel</gradient><gradient:#eea2a2:#7ac5d8> 后右键村民选择对象，再次输入可重新选择。</gradient>"
   selection-start: "<gradient:#43e97b:#38f9d7>选择模式已开启，请右键点击一名村民。</gradient>"
-  # ---------- 传送（修复问题3） ----------
   tp-success: "<gradient:#43e97b:#38f9d7>已传送到 </gradient><gradient:#fa709a:#fee140>{loc}</gradient>"
   tp-failed: "<gradient:#f093fb:#f5576c>传送失败：坐标格式错误。</gradient>"
   tp-world-not-found: "<gradient:#f093fb:#f5576c>世界 {world} 不存在。</gradient>"
 
-  # ---------- 外交系统（问题5） ----------
   diplomacy:
     ally: "同盟"
     neutral: "中立"
     enemy: "敌对"
   diplomacy-changed: "<gradient:#6a11cb:#2575fc>{first} 与 {second} 的外交关系变更为：</gradient><gradient:#fa709a:#fee140>{rel}</gradient>"
 
-  # ---------- 命令帮助描述（规范 7 / i18n） ----------
   help-reload: "重载配置"
   help-debug: "查看运行状态"
   help-profession: "指派村民职业"
@@ -34,7 +29,6 @@ messages:
   help-village: "村庄信息"
   help-ai: "AI 控制"
 
-  # ---------- 村民/职业 ----------
   villager-attacked: "<gradient:#f093fb:#f5576c>村民 {name} 正在遭受攻击！</gradient>"
   villager-not-found: "<gradient:#f093fb:#f5576c>未找到指定的村民。</gradient>"
   villager-not-selected: "<gradient:#f093fb:#f5576c>请先 </gradient><gradient:#fa709a:#fee140>右键点击</gradient><gradient:#f093fb:#f5576c> 一名村民，再使用 /bv 相关指令。</gradient>"
@@ -43,7 +37,6 @@ messages:
   villager-default: "村民"
   village-id-format: "村庄#{id}"
 
-  # ---------- 显示名格式（i18n：避免硬编码颜色码） ----------
   display:
     villager-name-format: "<gradient:#e0c3fc:#8ec5fc>{name}</gradient><reset> <gradient:#eea2a2:#7ac5d8>{profession}</gradient>"
   profession-set: "<gradient:#43e97b:#38f9d7>已将村民 {name} 的职业设为 </gradient><gradient:#fa709a:#fee140>{profession}</gradient><gradient:#43e97b:#38f9d7>。</gradient>"
@@ -52,18 +45,15 @@ messages:
   profession-change-failed: "<gradient:#f093fb:#f5576c>无法指派职业 {profession}：村庄不存在或已有其他国王。</gradient>"
   profession-cooldown: "<gradient:#f093fb:#f5576c>村民 {name} 的转职冷却尚未结束。</gradient>"
 
-  # ---------- 村庄 ----------
   village-info: "<gradient:#6a11cb:#2575fc>村庄 {name} </gradient><gradient:#eea2a2:#7ac5d8>| 人口: </gradient><gradient:#fa709a:#fee140>{pop} </gradient><gradient:#eea2a2:#7ac5d8>| 中心: </gradient><gradient:#fa709a:#fee140>{loc} </gradient><gradient:#eea2a2:#7ac5d8>| 国王: </gradient><gradient:#fa709a:#fee140>{king}</gradient>"
   village-none: "<gradient:#eea2a2:#7ac5d8>附近未发现村庄。</gradient>"
   king-info: "<gradient:#6a11cb:#2575fc>国王 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#eea2a2:#7ac5d8>| HP: </gradient><gradient:#fa709a:#fee140>{hp} </gradient><gradient:#eea2a2:#7ac5d8>| 状态: </gradient><gradient:#fa709a:#fee140>{state}</gradient>"
   king-absent: "<gradient:#eea2a2:#7ac5d8>该村庄当前没有国王。</gradient>"
 
-  # ---------- 建造 ----------
   building-started: "<gradient:#43e97b:#38f9d7>村民开始建造 </gradient><gradient:#fa709a:#fee140>{structure}</gradient><gradient:#43e97b:#38f9d7>。 </gradient><gradient:#eea2a2:#7ac5d8><underlined>[点击传送]</underlined></gradient>"
   building-completed: "<gradient:#43e97b:#38f9d7>建造完成：</gradient><gradient:#fa709a:#fee140>{structure}</gradient><gradient:#43e97b:#38f9d7>。 </gradient><gradient:#eea2a2:#7ac5d8><underlined>[点击传送]</underlined></gradient>"
   click-to-teleport: "<gradient:#fa709a:#fee140>点击传送到此位置</gradient>"
 
-  # ---------- 建造类型名（规范 3.3 / i18n） ----------
   structure:
     wall: "城墙"
     farm: "农田"
@@ -77,25 +67,34 @@ messages:
     defense_drill: "防御演习"
     harvest_festival: "收获庆典"
     building_contest: "建筑竞赛"
-  # ---------- 发展阶段（要想富先修路） ----------
+
+  activity:
+    trade_fair: "贸易集市"
+    defense_drill: "防御演习"
+    harvest_festival: "收获庆典"
+    building_contest: "建筑竞赛"
+
   dev-phase:
     roads: "道路网络"
     streetscape: "街景配套"
     housing: "房屋优化"
     defense_landscape: "景观与城墙"
 
-  # ---------- 国王命令 ----------
   king-command: "<gradient:#6a11cb:#2575fc>国王 {name}: {command}</gradient>"
   village-entry-title: "{village}"
   village-entry-subtitle: "国王：{king}  |  人数：{pop}"
   village-entry-actionbar: "<gradient:#6a11cb:#2575fc>当前位于 </gradient><gradient:#fa709a:#fee140>{village} </gradient><gradient:#6a11cb:#2575fc>村庄范围内</gradient>"
   village-entry-command: "<gradient:#6a11cb:#2575fc>{king}：</gradient><gradient:#e0c3fc:#8ec5fc>{command}</gradient>"
+<<<<<<< Updated upstream
   village-activity-started: "<gradient:#6a11cb:#2575fc>{village} 开始举行：</gradient><gradient:#fa709a:#fee140>{activity}</gradient>"
+=======
+  village-activity-started: "<gradient:#6a11cb:#2575fc>国王 {host} 宣布 {village} 开始举行：</gradient><gradient:#fa709a:#fee140>{activity}</gradient>"
+  king-housing-command: "住房不足（人口 {population}，住宅 {houses}/{required}），启动大基建：同时开工 {count} 栋房屋"
+>>>>>>> Stashed changes
   village-entry-unknown: "未知"
   village-verify-start: "<gradient:#eea2a2:#7ac5d8>正在异步校验村庄数据（去重/合并重复实体）...</gradient>"
   village-verify-done: "<gradient:#43e97b:#38f9d7>村庄校验完成：扫描 </gradient><gradient:#fa709a:#fee140>{scanned} </gradient><gradient:#43e97b:#38f9d7>个村庄，合并 </gradient><gradient:#fa709a:#fee140>{merged} </gradient><gradient:#43e97b:#38f9d7>个，标记 </gradient><gradient:#fa709a:#fee140>{flagged} </gradient><gradient:#43e97b:#38f9d7>个异常指纹。</gradient>"
 
-  # ---------- 生电模式 ----------
   region-created: "<gradient:#43e97b:#38f9d7>生电保护区 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#43e97b:#38f9d7>已创建。</gradient>"
   region-deleted: "<gradient:#43e97b:#38f9d7>生电保护区 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#43e97b:#38f9d7>已删除。</gradient>"
   region-exists: "<gradient:#f093fb:#f5576c>名称为 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#f093fb:#f5576c>的保护区已存在。</gradient>"
@@ -118,7 +117,6 @@ messages:
   region-persistence-failed: "<gradient:#f093fb:#f5576c>保护区保存失败，运行时状态未改变，请检查数据库日志。</gradient>"
   region-rename-usage: "<gradient:#f093fb:#f5576c>用法：/bv rename 当前名字 新名字</gradient>"
 
-  # ---------- AI ----------
   ai-toggle-on: "<gradient:#43e97b:#38f9d7>已为村民 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#43e97b:#38f9d7>启用 AI。</gradient>"
   ai-toggle-off: "<gradient:#eea2a2:#7ac5d8>已为村民 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#eea2a2:#7ac5d8>禁用 AI。</gradient>"
   ai-reset: "<gradient:#43e97b:#38f9d7>已重置村民 </gradient><gradient:#fa709a:#fee140>{name} </gradient><gradient:#43e97b:#38f9d7>的 AI 记忆。</gradient>"
@@ -128,10 +126,8 @@ messages:
   ai-circuit-open: "<gradient:#f093fb:#f5576c>AI 熔断器已开启，临时降级为规则行为。</gradient>"
   ai-unavailable: "<gradient:#f093fb:#f5576c>AI 服务不可用，已降级处理。</gradient>"
 
-  # ---------- 跨职业社交（规范 3.3：村民攀谈内容，AI 不可用时回退） ----------
   social:
     chat-default: "今天天气不错"
-    # 攀谈头顶标签格式（i18n：已提取为键）
     chat-label-format: "<gradient:#fa709a:#fee140>\"{text}\"</gradient>"
     chat-bubble-format: "<gradient:#fa709a:#fee140>\"{text}\"</gradient>"
     trade-fallback: "交易完成"
@@ -140,9 +136,6 @@ messages:
       - "{name}，你负责的{profession}工作辛苦了。"
       - "{name}，今天的{profession}职责忙完了吗？"
 
-  # Prompt 模板已迁移到独立文件 prompt.yml（规范 6.2）
-
-  # ---------- 跨职业社交 AI 提示词回退（prompt.yml 缺失时使用） ----------
   ai-prompt:
     diplomacy-system: "你是中世纪村庄的国王，需要决定与邻近村庄的外交关系。综合双方人口和当前关系，只能回复一个关键词：ALLY / NEUTRAL / ENEMY。和平发展优先 ALLY 或 NEUTRAL，只有明确存在长期资源冲突或安全威胁时才选择 ENEMY。只输出关键词本身。"
     diplomacy-user: "本村庄: {first}，人口 {first-pop}；邻近村庄: {second}，人口 {second-pop}；当前关系: {relation}。请给出新的外交关系关键词。"
@@ -159,7 +152,6 @@ messages:
       leggings: "护腿"
       boots: "靴子"
 
-  # ---------- 调试 ----------
   debug-header: "<gradient:#6a11cb:#2575fc>===== BetterVillagers 运行状态 =====</gradient>"
   debug-platform: "<gradient:#eea2a2:#7ac5d8>平台: </gradient><gradient:#fa709a:#fee140>{platform}</gradient>"
   debug-online-villagers: "<gradient:#eea2a2:#7ac5d8>在线村民: </gradient><gradient:#fa709a:#fee140>{count}</gradient>"
@@ -168,7 +160,6 @@ messages:
   debug-provider-latency: "<gradient:#eea2a2:#7ac5d8>provider 延迟/错误率: </gradient><gradient:#fa709a:#fee140>{stats}</gradient>"
   debug-region-load: "<gradient:#eea2a2:#7ac5d8>区域线程负载: </gradient><gradient:#fa709a:#fee140>{stats}</gradient>"
 
-  # ---------- 系统日志（规范 4.5 / i18n） ----------
   log:
     startup: "BetterVillagers 已启用 (平台: {platform})"
     shutdown: "BetterVillagers 已禁用，数据已保存。"
@@ -182,6 +173,9 @@ messages:
     resource-save-fail: "释放资源 {resource} 失败: {error}"
     pathfind-fail: "寻路失败: {error}"
     building-terrain-unsuitable: "建造任务 {type} 因地形不适合（水/熔岩/坡度过大）而取消"
+    building-clearance-obstructed: "建造任务 {type} 净空检查未通过：建筑范围阻挡列 {footprint}，周边阻挡列 {surroundings}，未加载区块 {unloaded}"
+    king-building-rejected: "村庄 #{village} 的国王建造计划 {type} 未能开工：{error}；不会进入命令冷却"
+    king-building-deferred: "村庄 #{village} 暂缓国王建造计划：{reason}"
     building-no-builder: "村庄 #{village} 无建筑师，国王建造命令已取消"
     building-ai-hold: "建筑师 AI 对任务 {type} 决定暂缓（HOLD）"
     building-phase-hold: "村庄 #{village} 施工阶段 {phase} AI 建议暂缓"
@@ -211,13 +205,11 @@ messages:
     provider-call-fail: "{provider} 调用失败: {error}"
     ai-provider-init: "AI Provider: {provider}"
 
-  # ---------- 线程边界守护（规范 4.5） ----------
   guard:
     illegal-region: "非法线程：方块操作未在区域线程执行 location={location}"
     illegal-tick: "非法线程：世界状态操作未在 tick 线程执行"
     illegal-async: "非法线程：纯计算任务不应在 tick 线程执行"
 
-  # ---------- 存储异常（规范 8.x / i18n） ----------
   errors:
     driver-missing: "未找到 MySQL/MariaDB 驱动！请将驱动放入服务端 libs 或切换 storage.type=sqlite。"
     schema-init: "初始化数据库 schema 失败: {error}"
@@ -245,16 +237,13 @@ messages:
     ai-rate-limiter-interrupted: "AI 请求限流等待被中断"
     ai-http-error: "HTTP {code}: {body}"
 
-  # ---------- 调试补充 ----------
   debug-circuit-disabled: "已禁用"
   debug-stats-format: "provider={provider} 请求={requests} 平均={latency}ms 错误={errors}% 命中={hits} 未命中={misses}"
   debug-region-stats-format: "保护区={regions} 活跃施工={jobs}"
 
-  # ---------- 命令用法占位符（规范 6.2 / i18n） ----------
   usage-profession: "<职业>"
   usage-prompt: "<提示词>"
 
-  # ---------- 名字库（规范 6.2 / i18n：中世纪风格名字数据） ----------
   names:
     villager-prefix:
       - "阿尔"
@@ -357,7 +346,6 @@ messages:
       - "镇"
       - "村"
 
-  # ---------- 原生库存 GUI ----------
   gui:
     title:
       main: "<gradient:#6a11cb:#2575fc>BetterVillagers 管理菜单</gradient>"
@@ -484,12 +472,10 @@ messages:
       ai-test: "<yellow>请使用 <gold>/bv ai test <提示词></gold> 测试已选择村民的 AI。</yellow>"
       ai-chat: "<yellow>请使用 <gold>/bv ai chat <消息></gold> 与已选择村民对话。</yellow>"
 
-  # ---------- 系统 ----------
   startup: |-
     <gradient:#d7ff7b:#d0ff7a:#cafe79:#c3fe77:#bcfd76:#b6fd75:#affc74:#a8fc73:#a2fc71:#9bfb70:#94fb6f:#8efa6e:#87fa6d:#80f96c:#7af96a:#73f969:#6cf868:#66f867:#5ff766:#58f764:#52f663:#4bf662>VillagerRevolution启动成功</gradient>
   shutdown: "<gradient:#f093fb:#f5576c>BetterVillagers 已禁用，数据已保存。</gradient>"
 
-  # ---------- 职业显示名 ----------
   professions:
     king: "<gradient:#6a11cb:#2575fc>国王</gradient>"
     knight: "<gradient:#4facfe:#00f2fe>骑士</gradient>"

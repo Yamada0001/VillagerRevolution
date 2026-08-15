@@ -13,7 +13,9 @@ import org.bukkit.plugin.Plugin;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -72,7 +74,31 @@ public final class MessageService {
             plugin.getLogger().severe(logOrFallback("log.lang-read-fail", "{error}", e.getMessage()));
             this.messages = new YamlConfiguration();
         }
+        FileConfiguration bundledDefaults = bundledLanguage(loc);
+        if (bundledDefaults != null) {
+            this.messages.setDefaults(bundledDefaults);
+        }
         this.prefix = deserialize(messages.getString("messages.prefix", ""));
+    }
+
+    /** Keeps newly bundled language keys available without overwriting a server owner's existing file. */
+    private FileConfiguration bundledLanguage(String locale) {
+        String resource = "lang/" + locale + ".yml";
+        InputStream stream = plugin.getResource(resource);
+        if (stream == null && !"zh_CN".equals(locale)) {
+            stream = plugin.getResource("lang/zh_CN.yml");
+        }
+        if (stream == null) {
+            return null;
+        }
+        try (InputStream in = stream;
+             Reader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
+            return YamlConfiguration.loadConfiguration(reader);
+        } catch (IOException e) {
+            plugin.getLogger().warning(logOrFallback(
+                    "log.lang-read-fail", "{error}", String.valueOf(e.getMessage())));
+            return null;
+        }
     }
 
     /**
@@ -249,7 +275,7 @@ public final class MessageService {
         org.bukkit.Bukkit.getServer().sendMessage(full);
     }
 
-    private static String applyPlaceholders(String text, String... pairs) {
+    static String applyPlaceholders(String text, String... pairs) {
         if (pairs == null || pairs.length == 0) {
             return text;
         }

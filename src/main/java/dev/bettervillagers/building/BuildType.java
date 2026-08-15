@@ -12,7 +12,7 @@ package dev.bettervillagers.building;
 public enum BuildType {
     ROAD(DevPhase.ROADS, 8, 12, 16),
     STREETSCAPE(DevPhase.STREETSCAPE, 6, 10, 12),
-    HOUSE(DevPhase.HOUSING, 4, 14, 10),
+    HOUSE(DevPhase.HOUSING, 4, 14, 32),
     UPGRADE_HOUSE(DevPhase.HOUSING, 3, 16, 8),
     FARM(DevPhase.HOUSING, 3, 12, 6),
     TRADE_FAIR(DevPhase.HOUSING, 2, 16, 4),

@@ -1,6 +1,7 @@
 package dev.bettervillagers.building;
 
 import dev.bettervillagers.BV;
+import org.bukkit.HeightMap;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -61,6 +62,96 @@ final class TerrainAnalyzer {
         }
         return captureSnapshotAsync(center, radius)
                 .thenApplyAsync(snapshot -> snapshot == null ? null : analyze(snapshot), computeExecutor);
+<<<<<<< Updated upstream
+=======
+    }
+
+    /**
+     * Performs an exact three-dimensional clearance scan after a template and its placement are known.
+     * Every world read is kept on the owning region thread so this remains safe on Folia.
+     */
+    CompletableFuture<ClearanceAssessment> validateClearanceAsync(
+            World world, int minX, int maxX, int minZ, int maxZ,
+            int baseY, int maxBuildY, int horizontalBuffer, int verticalBuffer) {
+        if (world == null || minX > maxX || minZ > maxZ) {
+            return CompletableFuture.completedFuture(new ClearanceAssessment(0, 0, 1));
+        }
+        int safeHorizontalBuffer = Math.clamp(horizontalBuffer, 0, 8);
+        int safeVerticalBuffer = Math.clamp(verticalBuffer, 0, 8);
+        int scanMinX = minX - safeHorizontalBuffer;
+        int scanMaxX = maxX + safeHorizontalBuffer;
+        int scanMinZ = minZ - safeHorizontalBuffer;
+        int scanMaxZ = maxZ + safeHorizontalBuffer;
+        int scanMinY = Math.max(world.getMinHeight(), baseY + 1);
+        int scanMaxY = Math.min(world.getMaxHeight() - 1,
+                Math.max(scanMinY, maxBuildY + safeVerticalBuffer));
+
+        Map<Long, List<ClearanceColumn>> byChunk = new HashMap<>();
+        for (int x = scanMinX; x <= scanMaxX; x++) {
+            for (int z = scanMinZ; z <= scanMaxZ; z++) {
+                int chunkX = x >> 4;
+                int chunkZ = z >> 4;
+                long key = ((long) chunkX << 32) ^ (chunkZ & 0xffffffffL);
+                boolean footprint = x >= minX && x <= maxX && z >= minZ && z <= maxZ;
+                byChunk.computeIfAbsent(key, ignored -> new ArrayList<>())
+                        .add(new ClearanceColumn(x, z, footprint));
+            }
+        }
+
+        List<CompletableFuture<ClearanceSlice>> captures = new ArrayList<>(byChunk.size());
+        for (List<ClearanceColumn> columns : byChunk.values()) {
+            ClearanceColumn first = columns.getFirst();
+            int chunkX = first.worldX() >> 4;
+            int chunkZ = first.worldZ() >> 4;
+            Location regionKey = new Location(world, (chunkX << 4) + 8, baseY, (chunkZ << 4) + 8);
+            CompletableFuture<ClearanceSlice> capture = new CompletableFuture<>();
+            captures.add(capture);
+            BV.scheduler().runAtRegion(regionKey, () -> {
+                try {
+                    if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                        capture.complete(new ClearanceSlice(0, 0, 1));
+                        return;
+                    }
+                    int footprintObstacles = 0;
+                    int surroundingsObstacles = 0;
+                    for (ClearanceColumn column : columns) {
+                        boolean obstructed = false;
+                        for (int y = scanMinY; y <= scanMaxY; y++) {
+                            if (isClearanceObstacle(world.getBlockAt(column.worldX(), y, column.worldZ()).getType())) {
+                                obstructed = true;
+                                break;
+                            }
+                        }
+                        if (obstructed) {
+                            if (column.footprint()) {
+                                footprintObstacles++;
+                            } else {
+                                surroundingsObstacles++;
+                            }
+                        }
+                    }
+                    capture.complete(new ClearanceSlice(footprintObstacles, surroundingsObstacles, 0));
+                } catch (Throwable failure) {
+                    capture.completeExceptionally(failure);
+                }
+            });
+        }
+
+        return CompletableFuture.allOf(captures.toArray(CompletableFuture[]::new))
+                .thenApplyAsync(ignored -> {
+                    int footprintObstacles = 0;
+                    int surroundingsObstacles = 0;
+                    int unloadedChunks = 0;
+                    for (CompletableFuture<ClearanceSlice> capture : captures) {
+                        ClearanceSlice slice = capture.join();
+                        footprintObstacles += slice.footprintObstacles();
+                        surroundingsObstacles += slice.surroundingsObstacles();
+                        unloadedChunks += slice.unloadedChunks();
+                    }
+                    return new ClearanceAssessment(
+                            footprintObstacles, surroundingsObstacles, unloadedChunks);
+                }, computeExecutor);
+>>>>>>> Stashed changes
     }
 
     private CompletableFuture<TerrainSnapshot> captureSnapshotAsync(Location center, int radius) {
@@ -162,7 +253,7 @@ final class TerrainAnalyzer {
         int z = center.getBlockZ();
         int high;
         try {
-            high = world.getHighestBlockYAt(x, z);
+            high = world.getHighestBlockYAt(x, z, HeightMap.MOTION_BLOCKING_NO_LEAVES);
         } catch (Throwable ignored) {
             high = center.getBlockY();
         }
@@ -276,7 +367,7 @@ final class TerrainAnalyzer {
         int max = world.getMaxHeight() - 2;
         int high;
         try {
-            high = world.getHighestBlockYAt(x, z);
+            high = world.getHighestBlockYAt(x, z, HeightMap.MOTION_BLOCKING_NO_LEAVES);
         } catch (Throwable ignored) {
             high = preferY;
         }
@@ -308,8 +399,8 @@ final class TerrainAnalyzer {
         if (!type.isSolid()) {
             return false;
         }
-        if (PROTECTED.contains(type) && type != Material.WATER) {
-            return type != Material.BEDROCK && type != Material.LAVA;
+        if (PROTECTED.contains(type) || HARD_STRUCTURE.contains(type)) {
+            return false;
         }
         String name = type.name();
         return !name.endsWith("_LEAVES") && type != Material.SNOW && type != Material.POWDER_SNOW;
@@ -329,6 +420,33 @@ final class TerrainAnalyzer {
         return PROTECTED.contains(material) || HARD_STRUCTURE.contains(material) || material.isSolid();
     }
 
+    static boolean isClearanceObstacle(Material material) {
+        if (material == null) {
+            return false;
+        }
+        String name = material.name();
+        if (name.equals("AIR") || name.endsWith("_AIR") || isReplaceableDecoration(material)) {
+            return false;
+        }
+        if (name.endsWith("_LEAVES")) {
+            return true;
+        }
+        return PROTECTED.contains(material) || HARD_STRUCTURE.contains(material) || material.isSolid();
+    }
+
+    private static boolean isReplaceableDecoration(Material material) {
+        String name = material.name();
+        return name.endsWith("_SAPLING") || name.endsWith("_FLOWER") || name.endsWith("_TULIP")
+                || name.endsWith("_PETALS") || name.endsWith("_CARPET")
+                || name.equals("DANDELION") || name.equals("POPPY") || name.equals("BLUE_ORCHID")
+                || name.equals("ALLIUM") || name.equals("AZURE_BLUET") || name.equals("OXEYE_DAISY")
+                || name.equals("CORNFLOWER") || name.equals("LILY_OF_THE_VALLEY")
+                || name.equals("WITHER_ROSE") || name.equals("TORCHFLOWER")
+                || material == Material.SNOW || material == Material.TALL_GRASS
+                || material == Material.SHORT_GRASS || material == Material.FERN
+                || material == Material.DEAD_BUSH || material == Material.VINE;
+    }
+
     private static double clamp01(double value) {
         return Math.clamp(value, 0.0, 1.0);
     }
@@ -346,4 +464,19 @@ final class TerrainAnalyzer {
 
     private record Column(int localX, int localZ, int worldX, int worldZ) {
     }
+<<<<<<< Updated upstream
+=======
+
+    record ClearanceAssessment(int footprintObstacles, int surroundingsObstacles, int unloadedChunks) {
+        boolean clear() {
+            return footprintObstacles == 0 && surroundingsObstacles == 0 && unloadedChunks == 0;
+        }
+    }
+
+    private record ClearanceColumn(int worldX, int worldZ, boolean footprint) {
+    }
+
+    private record ClearanceSlice(int footprintObstacles, int surroundingsObstacles, int unloadedChunks) {
+    }
+>>>>>>> Stashed changes
 }

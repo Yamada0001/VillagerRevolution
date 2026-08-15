@@ -106,10 +106,12 @@
                                     <pattern>com.zaxxer.hikari</pattern>
                                     <shadedPattern>dev.bettervillagers.lib.hikari</shadedPattern>
                                 </relocation>
-                                <relocation>
-                                    <pattern>org.sqlite</pattern>
-                                    <shadedPattern>dev.bettervillagers.lib.sqlite</shadedPattern>
-                                </relocation>
+                                <!--
+                                    sqlite-jdbc must keep its original org.sqlite package name.
+                                    Its bundled native libraries export JNI symbols for
+                                    org.sqlite.core.NativeDB; relocating those Java classes makes
+                                    the JVM look for symbols that the native library cannot provide.
+                                -->
                             </relocations>
                         </configuration>
                     </execution>
