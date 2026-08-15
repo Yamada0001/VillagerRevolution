@@ -29,13 +29,8 @@ public final class StrategicAI {
     /** Minecraft 夜间起始/结束 tick（与 SocialEngine 共用语义）。 */
     private static final long NIGHT_START_TICKS = 13000L;
     private static final long NIGHT_END_TICKS = 23000L;
-<<<<<<< Updated upstream
-    /** 夜间跳过战略决策的概率（原硬编码 0.7）。 */
-    private static final double NIGHT_SKIP_PROBABILITY = 0.7;
-=======
     /** Sleeping hours may defer ordinary development, but emergency housing always bypasses this. */
     private static final double DEFAULT_NIGHT_SKIP_PROBABILITY = 0.25;
->>>>>>> Stashed changes
     private final Set<Integer> planningVillages = ConcurrentHashMap.newKeySet();
     private final Map<Integer, Long> lastCommandTime = new ConcurrentHashMap<>();
     private volatile boolean shutdown;
@@ -69,11 +64,7 @@ public final class StrategicAI {
             BV.diplomacy().review(king, village);
         }
         if (BV.activities() != null) {
-<<<<<<< Updated upstream
-            BV.activities().tick(village);
-=======
             BV.activities().tick(village, king);
->>>>>>> Stashed changes
         }
         if (!BV.config().feature("autonomous-building")) {
             return;
@@ -89,16 +80,6 @@ public final class StrategicAI {
             debugDeferred(village.id(), "site-planning-in-progress");
             return;
         }
-<<<<<<< Updated upstream
-        if (king.entity() != null) {
-            long worldTime = king.entity().getWorld().getTime();
-            if (worldTime >= NIGHT_START_TICKS && worldTime <= NIGHT_END_TICKS
-                    && Math.random() < NIGHT_SKIP_PROBABILITY) {
-                return;
-            }
-        }
-=======
->>>>>>> Stashed changes
         if (BV.building() == null) {
             return;
         }
@@ -227,32 +208,6 @@ public final class StrategicAI {
             final String notificationName = displayName;
             BV.scheduler().runGlobal(() -> dispatchPlan(king, village, finalType, notificationName));
             dispatched = true;
-<<<<<<< Updated upstream
-        } finally {
-            if (!dispatched) {
-                planningVillages.remove(village.id());
-            }
-        }
-    }
-
-    private void dispatchPlan(BVillager king, Village village, BuildType type, String notificationName) {
-        try {
-            if (!isRunning() || !BV.config().feature("autonomous-building")) {
-                return;
-            }
-            org.bukkit.Location center = pickSite(village, type);
-            if (center == null || center.getWorld() == null) {
-                return;
-            }
-            lastCommandTime.put(village.id(), System.currentTimeMillis());
-            BV.scheduler().runAtRegion(center, () -> {
-                int surfaceY = center.getWorld().getHighestBlockYAt(center.getBlockX(), center.getBlockZ()) + 1;
-                center.setY(surfaceY);
-                BV.building().issueTask(type.name(), village.id(), center);
-            });
-            notifyVillagePlayers(village, king.name(), notificationName);
-=======
->>>>>>> Stashed changes
         } finally {
             if (!dispatched) {
                 planningVillages.remove(village.id());
@@ -403,8 +358,6 @@ public final class StrategicAI {
                     player.sendMessage(dev.bettervillagers.i18n.MessageService.deserialize(message));
                 }
             }, null));
-<<<<<<< Updated upstream
-=======
     }
 
     static int housingBatchSize(BuildingManager.HousingStatus housing,
@@ -446,7 +399,6 @@ public final class StrategicAI {
         BV.plugin().getLogger().info(BV.messages().raw("log.king-building-deferred")
                 .replace("{village}", String.valueOf(villageId))
                 .replace("{reason}", reason));
->>>>>>> Stashed changes
     }
 
     /**

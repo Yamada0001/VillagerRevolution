@@ -134,11 +134,6 @@ public final class BuildingManager {
         return activeJobs.size();
     }
 
-<<<<<<< Updated upstream
-    public void issueTask(String typeName, int villageId, Location center) {
-        if (!BV.config().feature("autonomous-building") || center == null || center.getWorld() == null) {
-            return;
-=======
     public java.util.concurrent.CompletableFuture<Boolean> issueTask(
             String typeName, int villageId, Location center) {
         return issueTask(typeName, villageId, center, false);
@@ -154,7 +149,6 @@ public final class BuildingManager {
             String typeName, int villageId, Location center, boolean exactType) {
         if (!BV.config().feature("autonomous-building") || center == null || center.getWorld() == null) {
             return java.util.concurrent.CompletableFuture.completedFuture(false);
->>>>>>> Stashed changes
         }
         BuildType type = BuildType.fromCommand(typeName);
         if (type == null) {
@@ -165,11 +159,7 @@ public final class BuildingManager {
             BV.scheduler().runGlobal(() -> BV.messages().broadcast("building-started", "structure", displayName));
             BV.scheduler().runAsyncDelayed(() -> BV.scheduler().runGlobal(() ->
                     BV.messages().broadcast("building-completed", "structure", displayName)), 100L);
-<<<<<<< Updated upstream
-            return;
-=======
             return java.util.concurrent.CompletableFuture.completedFuture(true);
->>>>>>> Stashed changes
         }
         if (cache.count(villageId, type) >= type.maxPerVillage()) {
             BV.plugin().getLogger().info(
@@ -195,16 +185,6 @@ public final class BuildingManager {
                         initialTemplate.transformedDepth(initialPlacement)) / 2 + 1;
 
         String worldName = center.getWorld().getName();
-<<<<<<< Updated upstream
-        analyzer.assessAsync(candidate, radius).thenCompose(assessment -> {
-            if (assessment == null || !assessment.suitable()) {
-                roads.rollback(villageId, reservation);
-                logUnsuitable(type.name());
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
-            }
-            return consultBuilderAi(type, assessment).thenAccept(approved ->
-                    startApprovedBuild(villageId, worldName, candidate, reservation, assessment, type, approved));
-=======
         return analyzer.assessAsync(candidate, radius).thenCompose(assessment -> {
             if (assessment == null || !assessment.suitable()) {
                 roads.rollback(villageId, reservation);
@@ -216,20 +196,10 @@ public final class BuildingManager {
                     : consultBuilderAi(type, assessment);
             return approval.thenCompose(approved -> startApprovedBuild(
                     villageId, worldName, candidate, reservation, assessment, type, approved));
->>>>>>> Stashed changes
         }).exceptionally(failure -> {
             roads.rollback(villageId, reservation);
             BV.plugin().getLogger().log(java.util.logging.Level.SEVERE,
                     "Unable to prepare construction task " + type + " for village " + villageId, failure);
-<<<<<<< Updated upstream
-            return null;
-        });
-    }
-
-    private void startApprovedBuild(int villageId, String worldName, Location candidate,
-                                    RoadLayout.Reservation reservation,
-                                    SiteAssessment assessment, BuildType requested, BuildType approved) {
-=======
             return false;
         });
     }
@@ -238,7 +208,6 @@ public final class BuildingManager {
             int villageId, String worldName, Location candidate,
             RoadLayout.Reservation reservation,
             SiteAssessment assessment, BuildType requested, BuildType approved) {
->>>>>>> Stashed changes
         if (!BV.config().feature("autonomous-building") || BV.villages().get(villageId).isEmpty()
                 || candidate.getWorld() == null || !candidate.getWorld().getName().equals(worldName)
                 || approved == null || approved == BuildType.DESTROY && requested != BuildType.DESTROY) {
@@ -283,37 +252,6 @@ public final class BuildingManager {
             }
         }
 
-<<<<<<< Updated upstream
-        if (touchesProtectedRegion(worldName, steps)) {
-            roads.rollback(villageId, reservation);
-            return;
-        }
-
-        if (!cache.tryOccupy(villageId, approved, worldName,
-                assessment.centerX(), assessment.centerZ(), minX, maxX, minZ, maxZ)) {
-            roads.rollback(villageId, reservation);
-            return;
-        }
-        if (steps.isEmpty()) {
-            cache.releaseOnCancel(villageId, approved, worldName,
-                    assessment.centerX(), assessment.centerZ());
-            roads.rollback(villageId, reservation);
-            return;
-        }
-
-        ConstructionJob job = new ConstructionJob(villageId, approved.name(), worldName, candidate,
-                assessment.centerX(), assessment.targetLevelY(), assessment.centerZ(), steps, display(approved));
-        job.bindCache(cache, approved);
-        activeJobs.add(job);
-        plannedLayouts.put(job, new BuildLayoutRecord(villageId, worldName, approved.name(),
-                templateId, assessment.centerX(), assessment.targetLevelY(), assessment.centerZ(),
-                minX, maxX, minZ, maxZ,
-                placement == null ? StructureTemplate.Rotation.NONE.name() : placement.rotation().name(),
-                placement == null ? StructureTemplate.Mirror.NONE.name() : placement.mirror().name(),
-                clusterId));
-        if (reservation != null) {
-            pendingRoads.put(job, new PendingRoad(candidate.clone(), reservation));
-=======
         if (steps.isEmpty() || touchesProtectedRegion(worldName, steps)) {
             roads.rollback(villageId, reservation);
             return java.util.concurrent.CompletableFuture.completedFuture(false);
@@ -398,7 +336,6 @@ public final class BuildingManager {
                     assessment.centerX(), assessment.centerZ());
             roads.rollback(villageId, reservation);
             throw new java.util.concurrent.CompletionException(failure);
->>>>>>> Stashed changes
         }
     }
 

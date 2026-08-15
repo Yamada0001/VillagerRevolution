@@ -1,11 +1,3 @@
-<<<<<<< Updated upstream
-# ============================================================
-# BetterVillagers 主配置
-# 对应开发规范第六章 / 各功能模块配置项
-# ver: 配置版本号（勿手动修改，由 Ver.java 控制）
-# ============================================================
-=======
->>>>>>> Stashed changes
 ver: 6
 plugin:
   language: "zh_CN"
@@ -119,8 +111,6 @@ activities:
   interval-seconds: 1800
   duration-seconds: 180
 
-<<<<<<< Updated upstream
-=======
 # ---------- 国王住房大基建 ----------
 building:
   housing:
@@ -128,7 +118,6 @@ building:
     residents-per-house: 3            # 每栋已建/在建住宅的规划容纳人数
     reserve-houses: 4                 # 在人口刚好住满时额外预留的住宅
 
->>>>>>> Stashed changes
 # ---------- 玩法平衡 ----------
 gameplay:
   equipment:
@@ -140,11 +129,7 @@ gameplay:
     minimum-occupied-slots: 6
     max-stacks-per-operation: 2
 
-<<<<<<< Updated upstream
-# ---------- 生电模式（规范 5.x） ----------
-=======
 # ---------- 生电模式 ----------
->>>>>>> Stashed changes
 redstone-mode:
   enabled: true
   protected-regions: []      # 可选只读预置区域：name/world/x1/y1/z1/x2/y2/z2/owner

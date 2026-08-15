@@ -50,13 +50,8 @@ public final class BuildCache {
                 record.minZ(), record.maxZ(), record.rotation(), record.mirror(), record.clusterId());
     }
 
-<<<<<<< Updated upstream
-    boolean tryOccupy(int villageId, BuildType type, String world, int x, int z,
-                      int minX, int maxX, int minZ, int maxZ) {
-=======
     synchronized boolean tryOccupy(int villageId, BuildType type, String world, int x, int z,
                                    int minX, int maxX, int minZ, int maxZ) {
->>>>>>> Stashed changes
         if (type == null || !type.physical()) {
             return true;
         }

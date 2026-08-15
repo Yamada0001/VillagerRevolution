@@ -62,8 +62,6 @@ final class TerrainAnalyzer {
         }
         return captureSnapshotAsync(center, radius)
                 .thenApplyAsync(snapshot -> snapshot == null ? null : analyze(snapshot), computeExecutor);
-<<<<<<< Updated upstream
-=======
     }
 
     /**
@@ -151,7 +149,6 @@ final class TerrainAnalyzer {
                     return new ClearanceAssessment(
                             footprintObstacles, surroundingsObstacles, unloadedChunks);
                 }, computeExecutor);
->>>>>>> Stashed changes
     }
 
     private CompletableFuture<TerrainSnapshot> captureSnapshotAsync(Location center, int radius) {
@@ -464,8 +461,6 @@ final class TerrainAnalyzer {
 
     private record Column(int localX, int localZ, int worldX, int worldZ) {
     }
-<<<<<<< Updated upstream
-=======
 
     record ClearanceAssessment(int footprintObstacles, int surroundingsObstacles, int unloadedChunks) {
         boolean clear() {
@@ -478,5 +473,4 @@ final class TerrainAnalyzer {
 
     private record ClearanceSlice(int footprintObstacles, int surroundingsObstacles, int unloadedChunks) {
     }
->>>>>>> Stashed changes
 }

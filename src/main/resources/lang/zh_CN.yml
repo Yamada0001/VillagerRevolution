@@ -85,12 +85,8 @@ messages:
   village-entry-subtitle: "国王：{king}  |  人数：{pop}"
   village-entry-actionbar: "<gradient:#6a11cb:#2575fc>当前位于 </gradient><gradient:#fa709a:#fee140>{village} </gradient><gradient:#6a11cb:#2575fc>村庄范围内</gradient>"
   village-entry-command: "<gradient:#6a11cb:#2575fc>{king}：</gradient><gradient:#e0c3fc:#8ec5fc>{command}</gradient>"
-<<<<<<< Updated upstream
-  village-activity-started: "<gradient:#6a11cb:#2575fc>{village} 开始举行：</gradient><gradient:#fa709a:#fee140>{activity}</gradient>"
-=======
   village-activity-started: "<gradient:#6a11cb:#2575fc>国王 {host} 宣布 {village} 开始举行：</gradient><gradient:#fa709a:#fee140>{activity}</gradient>"
   king-housing-command: "住房不足（人口 {population}，住宅 {houses}/{required}），启动大基建：同时开工 {count} 栋房屋"
->>>>>>> Stashed changes
   village-entry-unknown: "未知"
   village-verify-start: "<gradient:#eea2a2:#7ac5d8>正在异步校验村庄数据（去重/合并重复实体）...</gradient>"
   village-verify-done: "<gradient:#43e97b:#38f9d7>村庄校验完成：扫描 </gradient><gradient:#fa709a:#fee140>{scanned} </gradient><gradient:#43e97b:#38f9d7>个村庄，合并 </gradient><gradient:#fa709a:#fee140>{merged} </gradient><gradient:#43e97b:#38f9d7>个，标记 </gradient><gradient:#fa709a:#fee140>{flagged} </gradient><gradient:#43e97b:#38f9d7>个异常指纹。</gradient>"

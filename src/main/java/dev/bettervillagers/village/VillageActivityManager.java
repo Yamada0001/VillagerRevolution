@@ -1,16 +1,9 @@
 package dev.bettervillagers.village;
 
 import dev.bettervillagers.BV;
-<<<<<<< Updated upstream
-import dev.bettervillagers.i18n.MessageService;
-import dev.bettervillagers.profession.Profession;
-
-import java.util.Locale;
-=======
 import dev.bettervillagers.profession.Profession;
 import dev.bettervillagers.villager.BVillager;
 
->>>>>>> Stashed changes
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -21,15 +14,11 @@ public final class VillageActivityManager {
         TRADE_FAIR,
         DEFENSE_DRILL,
         HARVEST_FESTIVAL,
-<<<<<<< Updated upstream
-        BUILDING_CONTEST
-=======
         BUILDING_CONTEST;
 
         String translationKey() {
             return "activity." + name().toLowerCase(java.util.Locale.ROOT);
         }
->>>>>>> Stashed changes
     }
 
     private final Map<Integer, ActivityState> states = new ConcurrentHashMap<>();
@@ -55,13 +44,10 @@ public final class VillageActivityManager {
     }
 
     public void tick(Village village) {
-<<<<<<< Updated upstream
-=======
         tick(village, null);
     }
 
     public void tick(Village village, BVillager host) {
->>>>>>> Stashed changes
         if (!enabled || shutdown || village == null) {
             return;
         }
@@ -82,11 +68,7 @@ public final class VillageActivityManager {
         Long priorNotification = updated.activity() == null ? null
                 : notifiedStarts.put(village.id(), updated.startedAt());
         if (updated.activity() != null && !Long.valueOf(updated.startedAt()).equals(priorNotification)) {
-<<<<<<< Updated upstream
-            notifyStarted(village, updated.activity());
-=======
             notifyStarted(village, updated.activity(), host);
->>>>>>> Stashed changes
         }
     }
 
@@ -131,17 +113,6 @@ public final class VillageActivityManager {
         };
     }
 
-<<<<<<< Updated upstream
-    private static void notifyStarted(Village village, Activity activity) {
-        String activityName = BV.messages().raw(
-                "structure." + activity.name().toLowerCase(Locale.ROOT));
-        String villageName = village.name() == null || village.name().isBlank()
-                ? String.valueOf(village.id()) : village.name();
-        BV.scheduler().runGlobal(() -> {
-            var message = BV.messages().get("village-activity-started",
-                    "{village}", MessageService.escapeUntrusted(villageName),
-                    "{activity}", MessageService.escapeUntrusted(activityName));
-=======
     private static void notifyStarted(Village village, Activity activity, BVillager host) {
         String activityName = BV.messages().raw(activity.translationKey());
         String villageName = village.name() == null || village.name().isBlank()
@@ -153,7 +124,6 @@ public final class VillageActivityManager {
                     "village", villageName,
                     "activity", activityName,
                     "host", hostName);
->>>>>>> Stashed changes
             double radius = village.radius() + BV.config().villageEntryRangeExtra();
             double radiusSquared = radius * radius;
             for (org.bukkit.entity.Player player : org.bukkit.Bukkit.getOnlinePlayers()) {
